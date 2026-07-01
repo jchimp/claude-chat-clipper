@@ -1,0 +1,148 @@
+#=== Notes / Custom ===
+docs/private/
+*.local.md
+NOTES.md
+
+#=== Temp & Backup files ===
+*.swp
+*.tmp*
+*.bak*
+*.old*
+*.backup*
+
+#=== Env / Secrets ===
+.env
+.env.*
+*.key
+*.pem
+
+#=== Docs / Build output ===
+docs/_build/
+site/
+target/
+
+#=== Python — bytecode / compiled ===
+__pycache__/
+*.py[cod]
+*$py.class
+
+#=== Python — extensions ===
+*.so
+
+#=== Python — virtual environments ===
+venv/
+.venv/
+ENV/
+env/
+.env/
+.envrc
+
+#=== Python — distribution / packaging ===
+.Python
+build/
+dist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+#=== Python — installers / logs ===
+pip-log.txt
+pip-delete-this-directory.txt
+
+#=== Testing / Coverage ===
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py.cover
+.pytest_cache/
+.hypothesis/
+cover/
+
+#=== Django ===
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+#=== Flask ===
+instance/
+.webassets-cache
+
+#=== Scrapy ===
+.scrapy
+
+#=== Jupyter/ IPythong ===
+.ipynb_checkpoints
+profile_default/
+ipython_config.py
+
+#=== Redis / MQ / Brockers ====
+*.rdb
+*.aof
+mnesia/
+rabbitmq/
+rabbitmq-data/
+activemq-data/
+
+#=== PYTHON TOOLING / BUILD / CACHE ===
+.pybuilder/
+.pdm-python
+.pdm-build/
+.pixi
+__pypackages__/
+
+#=== Type checkers / Lint ===
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+
+#=== Cython ===
+cython_debug/
+
+#=== Streamlit ===
+.streamlit/secrets.toml
+
+#=== Marimo ===
+marimo/_static/
+marimo/_lsp/**
+
+#=== Docker ===
+*.log
+*.pid
+*.tar
+docker-compose.override.yml
+
+#=== IDE / Editors ===
+.vscode/
+.idea/
+.spyderproject
+.spyproject
+.ropeproject
+
+#=== OS Files ===
+.DS_Store
+Thumbs.db
+
+#=== Misc & Runtime ===
+tempCodeRunnerFile.py
