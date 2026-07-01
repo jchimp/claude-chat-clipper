@@ -166,7 +166,6 @@ window.__clipExtract = async function () {
         const heading = t.role === "user" ? "## 🧑 You" : "## 🤖 Assistant";
         return `${heading}\n\n${t.md}`;
       })
-      .join("\n\n");
 
     // Collapse any blank-line bloat reintroduced by the per-turn join.
     const tidyBody = typeof tidyWhitespace === "function" ? tidyWhitespace(body) : body.trim();
