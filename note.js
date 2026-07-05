@@ -26,10 +26,22 @@ function buildNote(data, settings) {
     ""
   ].join("\n");
 
+  // M365 Copilot's message list is lazily virtualized and the auto-scroller
+  // doesn't always reliably walk the whole thing on long chats — flag it so a
+  // partial clip isn't mistaken for a complete one.
+  const m365Warning =
+    data.site === "Microsoft 365 Copilot"
+      ? [
+          "> [!warning] Long chats may be incomplete",
+          "> M365 Copilot loads messages lazily; verify this transcript against the live chat for long conversations.",
+          ""
+        ].join("\n") + "\n"
+      : "";
+
   const notesBlock = [
     `# ${data.title}`,
     "",
-    "> [!note] My notes",
+    m365Warning + "> [!note] My notes",
     "> _Why I saved this / key takeaways:_",
     "> - ",
     "",

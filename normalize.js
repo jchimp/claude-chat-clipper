@@ -57,7 +57,7 @@ function normForCompare(s) {
 // actually reappears. If the sentence never reappears we drop nothing, so we
 // can never eat real content.
 function stripClaudeChrome(md) {
-  const headingRe = /^#{1,6}\s+Claude responded:\s*(.*)$/m;
+  const headingRe = /^#{1,6}\s+Claude (?:responded|said):\s*(.*)$/m;
   const m = (md || "").match(headingRe);
   if (!m) return md;
 

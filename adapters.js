@@ -53,6 +53,11 @@ const ADAPTERS = [
     ],
 
     SCROLL_SELECTORS: [
+      // Current Claude scroll pane. NOT scoped to `main` — the scroller lives
+      // outside it, which is why the older "main div.overflow-y-auto" missed.
+      // findScrollContainer() verifies scrollability, so this wins over the
+      // shorter "div.absolute.inset-0.overflow-auto" candidate on the page.
+      "div.overflow-y-auto.overflow-x-hidden",
       'div[data-testid="conversation"]',
       "main div.overflow-y-auto",
       "main div.overflow-y-scroll"
@@ -64,6 +69,11 @@ const ADAPTERS = [
     // __clipDiag() / Inspect — the exact class/testid values churn. Until a
     // selector here matches, those two artifacts will still leak through.
     PRUNE_SELECTORS: [
+      // Screen-reader preview headings ("You said: …" / "Claude said: …") that
+      // duplicate the visible text, and the per-turn action-bar button row
+      // (Retry / Copy / Edit / Read aloud) — both leak into the markdown.
+      ".sr-only",
+      '[data-testid^="action-bar-"]',
       '[data-testid="artifact-block-cell"]',
       '[data-testid="tool-use"]'
     ],
@@ -319,7 +329,11 @@ function claudeStructuralTurns(stream, asstAnchorSelectors) {
       out.push({ role: "user", el: userEl || child });
       continue;
     }
-    const txt = (child.innerText || "").replace(/\s+/g, " ").trim();
+    // textContent (not innerText): Claude wraps each turn in a
+    // `[content-visibility:auto]` row, which zeroes innerText for off-screen
+    // rows and made assistant turns vanish until scrolled into view. textContent
+    // is populated regardless of render state.
+    const txt = (child.textContent || "").replace(/\s+/g, " ").trim();
     if (txt.length > 1) out.push({ role: "assistant", el: child });
   }
 

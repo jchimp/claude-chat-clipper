@@ -88,39 +88,72 @@ async function collectByScrolling(adapter) {
     try { turns = adapter.turns ? adapter.turns() : null; } catch (e) { turns = null; }
     if (!turns || !turns.length) return;
     for (const t of turns) {
-      const sig = turnSig(t.role, t.el);
-      if (collected.has(sig)) continue;
-      const rect = t.el.getBoundingClientRect();
-      const absY = rect.top + scroller.scrollTop;
-      let md = htmlToMarkdown(pruneForConversion(adapter, t.el));
-      if (adapter.cleanTurn) md = adapter.cleanTurn(t.role, md);
-      if (md && md.trim()) collected.set(sig, { absY, role: t.role, md });
+      // One turn whose HTML trips up the converter (an unexpected node shape,
+      // a bad prune selector, etc.) must not abort the whole harvest — skip it
+      // and keep going so the rest of the conversation still gets clipped.
+      try {
+        const sig = turnSig(t.role, t.el);
+        if (collected.has(sig)) continue;
+        const rect = t.el.getBoundingClientRect();
+        const absY = rect.top + scroller.scrollTop;
+        let md = htmlToMarkdown(pruneForConversion(adapter, t.el));
+        if (adapter.cleanTurn) md = adapter.cleanTurn(t.role, md);
+        if (md && md.trim()) collected.set(sig, { absY, role: t.role, md });
+      } catch (e) {
+        console.warn("[Obsidian Chat Clipper] skipped a turn that failed to convert", e, t);
+      }
     }
   };
 
-  // Start at the very top and walk down, harvesting at each settle point.
+  // Settle at the very top first. Some lazily-loaded lists (e.g. M365 Copilot)
+  // fetch older messages as you scroll up, growing scrollHeight; without this,
+  // the earliest turns can be missing from the harvest. Keep re-touching the
+  // top until scrollHeight stops growing (or a safety cap is hit).
   scroller.scrollTop = 0;
   await SLEEP(STEP_DELAY);
+  for (let i = 0; i < 15; i++) {
+    const hBefore = scroller.scrollHeight;
+    scroller.scrollTop = 0;
+    await SLEEP(STEP_DELAY);
+    if (scroller.scrollHeight <= hBefore + 1) break;
+  }
   harvest();
 
   let steps = 0;
-  let stableBottom = 0;
+  let stableBottom = 0; // consecutive steps confirmed at a non-growing bottom
+  let stall = 0;        // consecutive steps with no movement AND no growth
+  const MAX_STALL = 10; // a slow lazy-load fetch shouldn't end the clip early
   while (steps < MAX_STEPS) {
     const before = scroller.scrollTop;
+    const beforeHeight = scroller.scrollHeight;
     scroller.scrollTop = before + step;
     await SLEEP(STEP_DELAY);
     harvest();
 
+    const grew = scroller.scrollHeight > beforeHeight + 1;
+    const moved = scroller.scrollTop > before + 1;
     const atBottom =
       scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4;
-    const didntMove = scroller.scrollTop <= before + 1;
 
-    if (atBottom || didntMove) {
+    if (grew || moved) {
+      // Still making real progress (advanced, or more content just loaded) —
+      // this is not "done", even if we also happen to read as at-bottom this
+      // step (more may load once we're there).
+      stall = 0;
+      stableBottom = 0;
+    } else if (atBottom) {
+      // Truly stuck at an unchanging bottom: confirm a couple of times (lets
+      // a final lazy chunk render) before declaring the conversation done.
+      stall = 0;
       stableBottom += 1;
-      // Two confirmations at the bottom (lets a final lazy chunk render).
       if (stableBottom >= 2) break;
     } else {
+      // No movement, no growth, not at bottom — a stall mid-conversation
+      // (e.g. a slow fetch). Don't treat this as done; only bail out after a
+      // long run of these so a genuinely stuck page can't loop forever.
       stableBottom = 0;
+      stall += 1;
+      if (stall >= MAX_STALL) break;
     }
     steps += 1;
   }
@@ -140,6 +173,17 @@ async function collectByScrolling(adapter) {
 }
 
 window.__clipExtract = async function () {
+  try {
+    return await __clipExtractInner();
+  } catch (e) {
+    // A throw here used to reject the whole injected function, so Chrome
+    // handed the popup an undefined result and it could only show the
+    // generic "Could not read this page." Surface the real error instead.
+    return { ok: false, error: "Unexpected error: " + ((e && (e.stack || e.message)) || e) };
+  }
+};
+
+async function __clipExtractInner() {
   const adapter = pickAdapter();
   if (!adapter) {
     return { ok: false, error: "No adapter matches " + location.hostname };
@@ -166,6 +210,7 @@ window.__clipExtract = async function () {
         const heading = t.role === "user" ? "## 🧑 You" : "## 🤖 Assistant";
         return `${heading}\n\n${t.md}`;
       })
+      .join("\n\n");
 
     // Collapse any blank-line bloat reintroduced by the per-turn join.
     const tidyBody = typeof tidyWhitespace === "function" ? tidyWhitespace(body) : body.trim();
@@ -215,7 +260,7 @@ window.__clipExtract = async function () {
     body: body.trim(),
     stats: { turns: 0, mode: "whole-root" },
   };
-};
+}
 
 function clipDiagCompute() {
   const adapter = pickAdapter();
@@ -254,8 +299,27 @@ function clipDiagCompute() {
     }
   } catch (e) {}
 
-  let topClasses = [];
+  // Report the scroll container the extractor would actually use, plus a sample
+  // turn-row's outer HTML — the two things a future Claude redesign needs.
+  let scrollInfo = "(none)";
+  let sampleTurn = "(none)";
   const root = (adapter.root && adapter.root()) || document.body;
+  try {
+    const scroller = findScrollContainer(adapter, root);
+    if (scroller && scroller.tagName) {
+      const cls = String(scroller.className || "").trim().split(/\s+/).filter(Boolean).join(".");
+      scrollInfo =
+        scroller.tagName.toLowerCase() + (cls ? "." + cls : "") +
+        ` (scrollH=${scroller.scrollHeight}, clientH=${scroller.clientHeight})`;
+    }
+    let turns = null;
+    try { turns = adapter.turns ? adapter.turns() : null; } catch (e) {}
+    if (turns && turns.length && turns[0].el) {
+      sampleTurn = (turns[0].el.outerHTML || "").slice(0, 400);
+    }
+  } catch (e) {}
+
+  let topClasses = [];
   if (root) {
     const freq = {};
     root.querySelectorAll("div[class]").forEach((el) => {
@@ -279,6 +343,8 @@ function clipDiagCompute() {
     assistantMatched: assistantTurns,
     testids,
     topClasses,
+    scrollInfo,
+    sampleTurn,
     title: adapter.title ? adapter.title() : "",
   };
 }
