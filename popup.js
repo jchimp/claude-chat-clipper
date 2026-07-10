@@ -11,6 +11,23 @@ async function getSettings() {
   return { ...DEFAULT_SETTINGS, ...(s.settings || {}) };
 }
 
+// Mirrors manifest.json host_permissions — the only hosts we can actually
+// inject into / have an adapter for. Guarding here avoids attempting
+// injection on privileged pages (chrome://, the extensions gallery, etc.),
+// which throws "The extensions gallery cannot be scripted."
+const SUPPORTED_HOSTS = [
+  /(^|\.)claude\.ai$/,
+  /^copilot\.microsoft\.com$/,
+  /(^|\.)cloud\.microsoft$/,
+];
+function isSupportedUrl(url) {
+  try {
+    return SUPPORTED_HOSTS.some((re) => re.test(new URL(url).hostname));
+  } catch {
+    return false;
+  }
+}
+
 async function activeTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab;
@@ -98,6 +115,14 @@ async function init() {
     e.preventDefault();
     chrome.runtime.openOptionsPage();
   });
+
+  if (!isSupportedUrl(tab && tab.url)) {
+    ["clip", "copy", "diag"].forEach((id) => {
+      $(id).disabled = true;
+    });
+    setStatus("Open a Claude or Copilot chat to clip.", "");
+    return;
+  }
 
   $("diag").addEventListener("click", async () => {
     setStatus("Running diagnostics…");
