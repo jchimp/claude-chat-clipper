@@ -84,16 +84,25 @@ const ADAPTERS = [
       return normalizeClaudeTurn(role, md);
     },
 
-    // The element that contains every turn. Computed from the user anchors so
-    // it survives Claude's class/testid churn.
+    // The element that contains every turn. Prefer deriving it from the
+    // user-message anchors — the one thing Claude reliably tags — over the
+    // guessed ROOT_SELECTORS fast path. ROOT_SELECTORS's Tailwind-class-soup
+    // entry (e.g. "main div.flex.flex-col.gap-3") is a `querySelector` first-
+    // match against common utility classes; a layout tweak can make it match
+    // some unrelated small container (an action-bar row, a header) instead of
+    // the real conversation, which silently zeroes out user-turn detection
+    // even though data-testid="user-message" is still present on the page.
+    // Only fall back to ROOT_SELECTORS when no user anchors exist at all.
     _stream() {
+      const users = Array.from(document.querySelectorAll(this.USER_SELECTORS.join(", ")));
+      if (users.length) {
+        let stream = commonAncestor(users);
+        if (!stream || users.includes(stream)) stream = users[0].parentElement;
+        if (stream) return stream;
+      }
       const sel = firstMatch(this.ROOT_SELECTORS);
       if (sel) return sel;
-      const users = Array.from(document.querySelectorAll(this.USER_SELECTORS.join(", ")));
-      if (!users.length) return document.querySelector("main") || document.body;
-      let stream = commonAncestor(users);
-      if (!stream || users.includes(stream)) stream = users[0].parentElement;
-      return stream || document.body;
+      return document.querySelector("main") || document.body;
     },
 
     root() {
