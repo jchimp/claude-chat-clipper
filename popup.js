@@ -58,6 +58,8 @@ function formatDiag(d, url) {
     "",
     "user turns matched: " + d.userMatched,
     "assistant turns matched: " + d.assistantMatched,
+    ...(d.turnsThrew ? ["turns() threw: " + d.turnsThrew] : []),
+    ...(d.genericCounts ? ["generic fallback sees: " + d.genericCounts] : []),
     "",
     "ROOT selectors:",
     ...d.root.map((r) => `  [${r.matched ? "MATCH" : "  -  "}] ${r.sel}`),
@@ -171,6 +173,18 @@ async function init() {
       setStatus("Collecting full conversation (auto-scrolling)…");
       const data = await extract(tab.id);
       if (!data || !data.ok) {
+        // Hand the user the fix material: diagnostics were computed in-page
+        // at the moment of failure — copy them so one paste re-tunes the
+        // selector instead of a manual Diagnose round-trip.
+        if (data && data.diag) {
+          try { await navigator.clipboard.writeText(formatDiag(data.diag, tab.url)); } catch {}
+          setStatus(
+            ((data && data.error) || "Could not read this page.") +
+              " — diagnostics copied; paste to Claude to fix the selector.",
+            "err"
+          );
+          return;
+        }
         setStatus((data && data.error) || "Could not read this page.", "err");
         return;
       }
@@ -180,11 +194,20 @@ async function init() {
       const res = await writeNote(filename, md);
       const n = (data.stats && data.stats.turns) || 0;
       const got = n ? ` (${n} turns)` : " (whole-page mode)";
+      // Saved, but via a degraded capture path (generic/whole-root): the note
+      // is on disk, so the clipboard is free for the diagnostics.
+      let degradedNote = "";
+      if (data.diag) {
+        try {
+          await navigator.clipboard.writeText(formatDiag(data.diag, tab.url));
+          degradedNote = " Degraded capture — diagnostics copied; paste to Claude to fix the selector.";
+        } catch {}
+      }
       if (res.method === "vault") {
-        setStatus("Saved to vault: " + res.path + got, "ok");
+        setStatus("Saved to vault: " + res.path + got + degradedNote, "ok");
       } else {
         setStatus(
-          "Saved to " + res.path + got + " — re-grant the vault folder in Settings to save there directly.",
+          "Saved to " + res.path + got + " — re-grant the vault folder in Settings to save there directly." + degradedNote,
           "ok"
         );
       }
@@ -198,14 +221,27 @@ async function init() {
     try {
       const data = await extract(tab.id);
       if (!data || !data.ok) {
+        // On failure the clipboard is free — copy the diagnostics instead.
+        if (data && data.diag) {
+          try { await navigator.clipboard.writeText(formatDiag(data.diag, tab.url)); } catch {}
+          setStatus(
+            ((data && data.error) || "Could not read this page.") +
+              " — diagnostics copied; paste to Claude to fix the selector.",
+            "err"
+          );
+          return;
+        }
         setStatus((data && data.error) || "Could not read this page.", "err");
         return;
       }
       const settings = await getSettings();
       const md = buildNote(data, settings);
+      // The user asked for the NOTE in the clipboard — never clobber it with
+      // diagnostics, even on a degraded capture; just flag it in the status.
       await navigator.clipboard.writeText(md);
       const n = (data.stats && data.stats.turns) || 0;
-      setStatus("Copied to clipboard" + (n ? ` (${n} turns).` : "."), "ok");
+      const degraded = data.diag ? " Degraded capture — use Diagnose for selector info." : "";
+      setStatus("Copied to clipboard" + (n ? ` (${n} turns).` : ".") + degraded, "ok");
     } catch (err) {
       setStatus("Error: " + err.message, "err");
     }
