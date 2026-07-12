@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Chat Clipper — offline tests</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem; }
+  li.pass { color: #1a7f37; }
+  li.fail { color: #cf222e; font-weight: bold; }
+  #summary { font-size: 1.2rem; margin-top: 1rem; }
+</style>
+</head>
+<body>
+<h1>Obsidian Chat Clipper — offline tests</h1>
+<p>Open via <code>file://</code>. Tests <code>genericTurns()</code>, selector tiering,
+and the HTML→MD converter without loading the extension.</p>
+<ul id="results"></ul>
+<div id="summary"></div>
+
+<!-- Fixtures are mounted here one at a time (unionTurns queries document-wide,
+     so concurrent fixtures would cross-contaminate). -->
+<div id="stage" style="position:absolute; left:-9999px;"></div>
+
+<script src="../normalize.js"></script>
+<script src="../adapters.js"></script>
+<script src="../html2md.js"></script>
+<script>
+const results = document.getElementById("results");
+let passed = 0, failed = 0;
+
+function check(name, cond, detail) {
+  const li = document.createElement("li");
+  li.className = cond ? "pass" : "fail";
+  li.textContent = (cond ? "PASS " : "FAIL ") + name + (cond ? "" : " — " + (detail || ""));
+  results.appendChild(li);
+  cond ? passed++ : failed++;
+}
+
+const stage = document.getElementById("stage");
+function mount(html) { stage.innerHTML = html; return stage.firstElementChild; }
+function unmount() { stage.innerHTML = ""; }
+
+function roles(turns) { return (turns || []).map((t) => t.role).join(","); }
+
+// ---------------------------------------------------------------------------
+// 1. genericTurns — attribute/class hint pass
+// ---------------------------------------------------------------------------
+{
+  const root = mount(`
+    <div id="conv">
+      <div data-testid="user-bubble"><p>How do I sort a list in Python?</p></div>
+      <div class="ai-response"><p>Use <code>sorted()</code> or <code>list.sort()</code>.</p></div>
+      <div data-testid="user-bubble"><p>And in reverse?</p></div>
+      <div class="ai-response"><p>Pass <code>reverse=True</code>.</p></div>
+    </div>`);
+  const t = genericTurns(root);
+  check("hint pass finds 4 turns", t && t.length === 4, "got " + roles(t));
+  check("hint pass role order", roles(t) === "user,assistant,user,assistant", "got " + roles(t));
+  unmount();
+}
+
+// ---------------------------------------------------------------------------
+// 2. genericTurns — wrapper containing both roles is dropped, not kept
+// ---------------------------------------------------------------------------
+{
+  const root = mount(`
+    <div class="user-chat-container">
+      <div data-testid="userMessage"><p>Question one</p></div>
+      <div data-testid="botReply"><p>Answer one</p></div>
+      <div data-testid="userMessage"><p>Question two</p></div>
+      <div data-testid="botReply"><p>Answer two</p></div>
+    </div>`);
+  // The wrapper's own class matches the "user" pattern; if it survived, the
+  // outermost filter would collapse everything into one giant "user" turn.
+  const t = genericTurns(root);
+  check("wrapper is not treated as a turn", t && t.length === 4, "got " + (t ? t.length : "null") + " turns: " + roles(t));
+  check("wrapper-drop role order", roles(t) === "user,assistant,user,assistant", "got " + roles(t));
+  unmount();
+}
+
+// ---------------------------------------------------------------------------
+// 3. genericTurns — alternation fallback (no hints at all)
+// ---------------------------------------------------------------------------
+{
+  const root = mount(`
+    <div>
+      <div>
+        <div><p>First question with no semantic markup</p></div>
+        <div><p>First answer with no semantic markup</p></div>
+        <div><p>Second question</p></div>
+        <div><p>Second answer</p></div>
+      </div>
+    </div>`);
+  const t = genericTurns(root);
+  check("alternation fallback finds 4 turns", t && t.length === 4, "got " + (t ? t.length : "null"));
+  check("alternation starts with user", roles(t) === "user,assistant,user,assistant", "got " + roles(t));
+  unmount();
+}
+
+// ---------------------------------------------------------------------------
+// 4. genericTurns — composer/input area is skipped
+// ---------------------------------------------------------------------------
+{
+  const root = mount(`
+    <div>
+      <div data-testid="user-msg"><p>Hello</p></div>
+      <div class="bot-reply-row"><p>Hi! How can I help?</p></div>
+      <div class="user-input-area">
+        <textarea>draft text the user is typing</textarea>
+      </div>
+    </div>`);
+  const t = genericTurns(root);
+  check("composer skipped", t && t.length === 2, "got " + (t ? t.length : "null") + ": " + roles(t));
+  unmount();
+}
+
+// ---------------------------------------------------------------------------
+// 5. genericTurns — returns null-ish on empty root (no false positives)
+// ---------------------------------------------------------------------------
+{
+  const root = mount(`<div><div><p>only one block of text here</p></div></div>`);
+  const t = genericTurns(root);
+  check("single block yields no turns", !t || t.length === 0, "got " + roles(t));
+  unmount();
+}
+
+// ---------------------------------------------------------------------------
+// 6. unionTurns tiering — broad selector only used when precise one fails
+// ---------------------------------------------------------------------------
+{
+  // Precise present: broad selector would also match the noise node, but the
+  // precise tier must win and exclude it.
+  mount(`
+    <div>
+      <div data-content="user-message"><p>precise user</p></div>
+      <div data-testid="user-profile-menu"><p>noise: broad-only match</p></div>
+      <div data-content="ai-message"><p>precise assistant</p></div>
+    </div>`);
+  const t1 = unionTurns(
+    ['div[data-content="user-message"]', '[data-testid*="user" i]'],
+    ['div[data-content="ai-message"]']
+  );
+  check("tiering: precise wins, noise excluded", t1 && t1.length === 2 && roles(t1) === "user,assistant",
+    "got " + roles(t1));
+  unmount();
+
+  // Precise absent: broad tier takes over.
+  mount(`
+    <div>
+      <div data-testid="userQuery"><p>broad user</p></div>
+      <div data-testid="botAnswer"><p>broad assistant</p></div>
+    </div>`);
+  const t2 = unionTurns(
+    ['div[data-content="user-message"]', '[data-testid*="user" i]'],
+    ['div[data-content="ai-message"]', '[data-testid*="bot" i]']
+  );
+  check("tiering: broad activates when precise fails", t2 && roles(t2) === "user,assistant",
+    "got " + roles(t2));
+  unmount();
+}
+
+// ---------------------------------------------------------------------------
+// 7. htmlToMarkdown smoke — code fence with language survives
+// ---------------------------------------------------------------------------
+{
+  const root = mount(`
+    <div>
+      <p>Here is code:</p>
+      <pre><code class="language-python">print("hi")</code></pre>
+    </div>`);
+  const md = htmlToMarkdown(root);
+  check("code fence language", md.includes('```python\nprint("hi")\n```'), "got: " + JSON.stringify(md));
+  unmount();
+}
+
+// ---------------------------------------------------------------------------
+document.getElementById("summary").textContent =
+  failed === 0 ? `All ${passed} tests passed ✔` : `${failed} FAILED, ${passed} passed`;
+document.title = (failed === 0 ? "PASS — " : "FAIL — ") + document.title;
+</script>
+</body>
+</html>

@@ -138,11 +138,20 @@ const ADAPTERS = [
     // The ASSISTANT reply is the clean markdown in `markdown-reply`;
     // `copilot-message-reply-div` is the same body wrapped in "Copilot said: …
     // Reasoning completed in N steps" chrome, so we avoid it.
-    USER_SELECTORS: ['[data-testid="chatOutput"]'],
+    USER_SELECTORS: [
+      '[data-testid="chatOutput"]',
+      // Last-resort tier (only used when the above matches nothing — see
+      // firstMatchingAll). chatQuestion carries "You said:" chrome, but
+      // cleanTurn strips it, so a degraded clip still reads fine.
+      '[data-testid="chatQuestion"]',
+      '[data-testid*="question" i]'
+    ],
     // markdown-reply also tags empty data-message-type="Progress" placeholders
     // (the streaming/reasoning steps); exclude them so we don't emit empty turns.
     ASSISTANT_SELECTORS: [
-      '[data-testid="markdown-reply"]:not([data-message-type="Progress"])'
+      '[data-testid="markdown-reply"]:not([data-message-type="Progress"])',
+      // Last-resort tier: any reply-ish testid, still excluding Progress rows.
+      '[data-testid*="reply" i]:not([data-message-type="Progress"])'
     ],
 
     // Chrome stripped before html2md (pruneForConversion reads this generically):
@@ -212,11 +221,17 @@ const ADAPTERS = [
 
     USER_SELECTORS: [
       'div[data-content="user-message"]',
-      '[data-testid="userMessage"]'
+      '[data-testid="userMessage"]',
+      // Last-resort tier (only used when the above match nothing).
+      '[data-content*="user" i]',
+      '[data-testid*="user" i]'
     ],
     ASSISTANT_SELECTORS: [
       'div[data-content="ai-message"]',
-      '[data-testid="botMessage"]'
+      '[data-testid="botMessage"]',
+      // Last-resort tier.
+      '[data-content*="ai" i]',
+      '[data-testid*="bot" i]'
     ],
 
     SCROLL_SELECTORS: [
@@ -255,21 +270,9 @@ function clean(s) {
   return (s || "").replace(/\s+/g, " ").trim();
 }
 
-// Match user and assistant selectors INDEPENDENTLY, tag each element's role,
-// drop any element nested inside another matched element (keep the outermost
-// message container), then order by document position. Returns [{role, el}]
-// or null if nothing matched at all.
-function unionTurns(userSels, asstSels) {
-  const found = [];
-  (userSels || []).forEach((sel) =>
-    document.querySelectorAll(sel).forEach((el) => found.push({ el, role: "user" }))
-  );
-  (asstSels || []).forEach((sel) =>
-    document.querySelectorAll(sel).forEach((el) => found.push({ el, role: "assistant" }))
-  );
-  if (!found.length) return null;
-
-  // Collapse the same element matched by multiple selectors.
+// Collapse duplicate elements, keep only outermost containers, and order
+// top-to-bottom by document position. Shared by unionTurns / genericTurns.
+function outermostByPosition(found) {
   const seen = new Set();
   const uniq = [];
   for (const f of found) {
@@ -293,6 +296,32 @@ function unionTurns(userSels, asstSels) {
   });
 
   return outer.map((f) => ({ role: f.role, el: f.el }));
+}
+
+// Per role, walk the selector list most-specific-first and use the FIRST
+// selector that matches anything (per the file-header convention). This keeps
+// broad last-resort entries (attribute-substring matches) from adding noise
+// while the precise selectors still work.
+function firstMatchingAll(selectors, role) {
+  for (const sel of selectors || []) {
+    let els = [];
+    try { els = Array.from(document.querySelectorAll(sel)); } catch (e) { continue; }
+    if (els.length) return els.map((el) => ({ el, role }));
+  }
+  return [];
+}
+
+// Match user and assistant selectors INDEPENDENTLY, tag each element's role,
+// drop any element nested inside another matched element (keep the outermost
+// message container), then order by document position. Returns [{role, el}]
+// or null if nothing matched at all.
+function unionTurns(userSels, asstSels) {
+  const found = [
+    ...firstMatchingAll(userSels, "user"),
+    ...firstMatchingAll(asstSels, "assistant"),
+  ];
+  if (!found.length) return null;
+  return outermostByPosition(found);
 }
 
 function pickAdapter() {
@@ -360,4 +389,85 @@ function claudeStructuralTurns(stream, asstAnchorSelectors) {
     return 0;
   });
   return out;
+}
+
+// =============================================================================
+// Generic structural fallback — used by clipper-extract.js when an adapter's
+// own turns() finds nothing (its selectors went stale). Recovers labelled
+// turns from naming conventions and structure alone, so a site redesign
+// degrades to "messy but still You/Assistant-split" instead of an unlabelled
+// whole-page dump. Deliberately loose: it only ever runs after the precise
+// selectors have already failed.
+// =============================================================================
+
+const GENERIC_USER_RE = /user|human|question|prompt/i;
+const GENERIC_ASST_RE = /assistant|\bbot\b|\bai\b|reply|response|copilot|claude/i;
+
+// Inspect an element's semantic attributes (class, id, data-*, aria-label,
+// role) for a role hint. Returns "user"/"assistant" only on an UNambiguous
+// hit — an element matching both patterns is ignored as noise.
+function genericRoleHint(el) {
+  let text = String(el.className || "") + " " + (el.id || "");
+  for (const a of el.attributes) {
+    if (a.name.startsWith("data-") || a.name === "aria-label" || a.name === "role") {
+      text += " " + a.name + "=" + a.value;
+    }
+  }
+  const isUser = GENERIC_USER_RE.test(text);
+  const isAsst = GENERIC_ASST_RE.test(text);
+  if (isUser && !isAsst) return "user";
+  if (isAsst && !isUser) return "assistant";
+  return null;
+}
+
+// Last-ditch: descend through single-child wrappers to the widest row list
+// and alternate roles user-first. Only trustworthy on a fully-mounted page —
+// virtualized lists can flip the parity as rows mount/unmount — but it beats
+// an unlabelled dump when nothing else matched.
+function alternatingTurns(root) {
+  let cur = root;
+  while (cur && cur.children.length === 1) cur = cur.children[0];
+  const blocks = Array.from(cur ? cur.children : []).filter(
+    (c) => (c.textContent || "").replace(/\s+/g, " ").trim().length > 1
+  );
+  if (blocks.length < 2) return null;
+  return blocks.map((el, i) => ({ role: i % 2 === 0 ? "user" : "assistant", el }));
+}
+
+// Heuristic turn detection over `root`. Same [{role, el}] | null contract as
+// an adapter's turns(), so the extractor can drop it in unchanged.
+function genericTurns(root) {
+  if (!root) return null;
+
+  // Pass 1: attribute/class naming conventions.
+  const tagged = [];
+  root.querySelectorAll("*").forEach((el) => {
+    const role = genericRoleHint(el);
+    if (!role) return;
+    // Skip the composer/input area and empty chrome.
+    if (el.querySelector("textarea, [contenteditable]")) return;
+    if ((el.textContent || "").replace(/\s+/g, " ").trim().length <= 1) return;
+    tagged.push({ el, role });
+  });
+
+  if (tagged.length) {
+    // An element that contains hits of BOTH roles is a conversation wrapper,
+    // not a message — drop it before the outermost filter collapses real
+    // turns into it.
+    const noWrappers = tagged.filter(
+      (f) => !tagged.some((g) => g.el !== f.el && f.el.contains(g.el) && g.role !== f.role)
+    );
+    const turns = outermostByPosition(noWrappers.length ? noWrappers : tagged);
+    // Only trust the hint pass if it found a real dialogue (both roles).
+    if (
+      turns.length >= 2 &&
+      turns.some((t) => t.role === "user") &&
+      turns.some((t) => t.role === "assistant")
+    ) {
+      return turns;
+    }
+  }
+
+  // Pass 2: structure-only alternation.
+  return alternatingTurns(root);
 }
