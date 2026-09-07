@@ -8,10 +8,9 @@ Claude-only, API-first clipper is written and passes offline tests. Needs a live
 - [x] Replace DOM scroll-and-harvest with same-origin API fetch
 - [x] Popup: Copy Markdown / Copy JSON / Download .md
 - [x] Offline test page for transcript.js
-- [ ] Load unpacked in Edge and verify last assistant turn present via Copy JSON
+- [x] Load unpacked in Edge and verify last assistant turn present via Copy JSON
 - [ ] Record a real API response into test/fixtures/conversation.js and run section B
 - [ ] Verify artifact folding and branch selection on real conversations
-- [ ] Rename repo and GitHub remote from obsidian-chat-clipper
 
 ## Progress Log
 
