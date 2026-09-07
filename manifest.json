@@ -1,7 +1,7 @@
-{
+﻿{
   "manifest_version": 3,
   "name": "Claude Chat Clipper",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Copy a claude.ai conversation as Markdown or JSON, or download it as a .md file.",
   "permissions": [
     "activeTab",
