@@ -17,7 +17,7 @@
 <p>Open via <code>file://</code>. Section A checks the branch walk, artifact folding,
 fence escaping and filename rules with minimal structural inputs. Section B runs
 against a real API response if <code>test/fixtures/conversation.js</code> exists
-(see README → "Recording a fixture").</p>
+(see docs/TESTING.md → "Recording a fixture").</p>
 <ul id="results"></ul>
 <div id="summary"></div>
 
@@ -146,7 +146,7 @@ if (window.FIXTURE_RAW) {
   pre.textContent = md.slice(0, 3000) + (md.length > 3000 ? "\n…" : "");
   document.body.appendChild(pre);
 } else {
-  skip("B fixture tests", "test/fixtures/conversation.js not found; see README to record one");
+  skip("B fixture tests", "test/fixtures/conversation.js not found; see docs/TESTING.md to record one");
 }
 
 document.getElementById("summary").textContent =
