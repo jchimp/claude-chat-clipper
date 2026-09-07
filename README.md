@@ -92,10 +92,40 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Contributing
 
-Bug reports and pull requests are welcome. There is no build step: edit a file,
-reload the extension. Tests are one HTML page; see
+Bug reports and pull requests are welcome. There is no build step while
+developing: edit a file, reload the extension. Tests are one HTML page; see
 [docs/TESTING.md](docs/TESTING.md) for running them and recording a fixture
 from a real conversation.
+
+## Releases
+
+Packaging is one script. It validates the manifest, resolves what ships, and
+writes a versioned zip plus a SHA256 sidecar to `dist/`.
+
+```powershell
+.\scripts\release.ps1                     # build at the current manifest version
+.\scripts\release.ps1 -Version 1.1.0      # bump the manifest, then build
+.\scripts\release.ps1 -Version 1.1.0 -Tag # bump, build, tag v1.1.0 locally
+.\scripts\release.ps1 -DryRun             # list what would ship, write nothing
+```
+
+The file list is read from source rather than kept in the script: icon paths
+come from `manifest.json` and the injected bundle from the `PAGE_FILES` array in
+`popup.js`, so adding a module does not silently omit it from a release.
+Everything else is an explicit allowlist, which keeps `test/fixtures/` and its
+real conversations out of the zip. The build fails rather than shipping if an
+icon's dimensions disagree with the size it is declared under, if a listed file
+is missing, or if `-Tag` is used on a dirty tree.
+
+`-Tag` only creates the tag. Pushing and publishing stay manual:
+
+```powershell
+git push origin v1.1.0
+gh release create v1.1.0 dist\claude-chat-clipper-1.1.0.zip `
+  dist\claude-chat-clipper-1.1.0.zip.sha256 --generate-notes
+```
+
+`dist/` is gitignored; build output stays local until you publish it.
 
 ## License
 
