@@ -13,6 +13,9 @@
       4. Writes dist/claude-chat-clipper-<version>.zip plus a SHA256 sidecar.
       5. Optionally creates the matching annotated git tag (-Tag).
 
+    Nothing happens without -Apply. Run with no switches to see exactly what a
+    release would do; add -Apply once the report looks right.
+
     The shipped file list is derived from source rather than hardcoded:
     icon paths come from manifest.json, and the injected page bundle comes
     from the PAGE_FILES array in popup.js. Anything not on that resolved list
@@ -34,25 +37,36 @@
 .PARAMETER OutDir
     Directory to write the zip into. Defaults to dist/ at the repo root.
 
+.PARAMETER Apply
+    Actually do the work. Without it the script is a dry run: it validates and
+    reports exactly what would happen, but writes, tags and publishes nothing.
+
 .PARAMETER DryRun
-    Validate and report what would happen; write nothing.
+    Accepted but redundant - a dry run is already the default. Kept so the
+    habit of typing it is never punished.
 
 .EXAMPLE
     .\scripts\release.ps1
-    Build a zip at the current manifest version.
+    Dry run: report what a build at the current manifest version would ship.
 
 .EXAMPLE
-    .\scripts\release.ps1 -Version 1.1.0 -Tag
-    Bump the manifest to 1.1.0, build, and tag the commit v1.1.0.
+    .\scripts\release.ps1 -Apply
+    Build the zip at the current manifest version.
 
 .EXAMPLE
-    .\scripts\release.ps1 -Version 1.1.0 -Publish
+    .\scripts\release.ps1 -Version 1.2.0 -Tag -Apply
+    Bump the manifest to 1.2.0, build, and tag the commit v1.2.0.
+
+.EXAMPLE
+    .\scripts\release.ps1 -Version 1.2.0 -Publish
+    Rehearse the full release and print every step it would take. Nothing
+    is written, tagged or pushed.
+
+.EXAMPLE
+    .\scripts\release.ps1 -Version 1.2.0 -Publish -Apply
     Bump, build, tag, push the tag, and publish the GitHub release with the
     zip attached. This is the one-command release.
 
-.EXAMPLE
-    .\scripts\release.ps1 -Version 1.1.0 -DryRun
-    Show what a 1.1.0 release would contain, changing nothing.
 #>
 
 [CmdletBinding()]
@@ -66,11 +80,19 @@ param(
 
     [string]$OutDir,
 
+    [switch]$Apply,
+
+    # Redundant: dry run is the default. Accepted so typing it still works.
     [switch]$DryRun
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+# Safe by default: this script only writes, tags or publishes with -Apply.
+# $DryRun is accepted but adds nothing, since its behaviour is already the
+# default. Everything below branches on $isDryRun, never on the parameters.
+$isDryRun = -not $Apply
 
 # This script lives in scripts/, so the repo root is one level up. Every
 # path in this file is resolved against $RepoRoot, not the script dir.
@@ -270,14 +292,23 @@ function New-ReleaseTag {
         throw "-Tag was requested but git is not on PATH."
     }
 
+    # As with the publish checks: a dry run reports these rather than stopping,
+    # so one rehearsal surfaces everything standing between you and a release.
+    $problems = [System.Collections.Generic.List[string]]::new()
+
     $status = git -C $RepoRoot status --porcelain
     if ($status) {
-        throw "-Tag requires a clean working tree. Commit or stash first:`n$status"
+        $problems.Add("-Tag requires a clean working tree. Commit or stash first:`n$status")
     }
 
     $existing = git -C $RepoRoot tag --list $TagName
     if ($existing) {
-        throw "Tag $TagName already exists. Delete it or pick another version."
+        $problems.Add("Tag $TagName already exists. Delete it or pick another version.")
+    }
+
+    if ($problems.Count -gt 0) {
+        if (-not $WhatIf) { throw ($problems -join "`n") }
+        foreach ($p in $problems) { Write-Warn "would fail: $p" }
     }
 
     if ($WhatIf) {
@@ -321,14 +352,23 @@ function Assert-PublishReady {
     <#
         Checked before anything is built, so a missing prerequisite fails in
         two seconds rather than after a tag has already been created.
-    #>
-    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-        throw "-Publish needs the GitHub CLI. Install it, then run: gh auth login"
-    }
 
-    $authed = Invoke-Native -What "gh auth status" -AllowFailure -Command { gh auth status *> $null }
-    if ($authed -ne 0) {
-        throw "-Publish needs an authenticated gh. Run: gh auth login"
+        On a dry run these are reported as warnings instead of throwing: the
+        point of a rehearsal is to see the whole plan, including the parts you
+        are not set up for yet.
+    #>
+    param([Parameter(Mandatory)][bool]$Soft)
+
+    $problems = [System.Collections.Generic.List[string]]::new()
+
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+        $problems.Add("-Publish needs the GitHub CLI. Install it, then run: gh auth login")
+    }
+    else {
+        $authed = Invoke-Native -What "gh auth status" -AllowFailure -Command { gh auth status *> $null }
+        if ($authed -ne 0) {
+            $problems.Add("-Publish needs an authenticated gh. Run: gh auth login")
+        }
     }
 
     # The release is cut from the tagged commit, so that commit has to be on
@@ -336,8 +376,17 @@ function Assert-PublishReady {
     # nobody else can see.
     $onRemote = git -C $RepoRoot branch -r --contains HEAD 2>$null
     if (-not $onRemote) {
-        throw "HEAD is not on the remote yet. Push your branch first, then release."
+        $problems.Add("HEAD is not on the remote yet. Push your branch first, then release.")
     }
+
+    if ($problems.Count -eq 0) {
+        Write-Note "gh authenticated, HEAD is on the remote"
+        return
+    }
+
+    if (-not $Soft) { throw ($problems -join "`n") }
+
+    foreach ($p in $problems) { Write-Warn "would fail: $p" }
 }
 
 function Publish-Release {
@@ -374,14 +423,15 @@ function Publish-Release {
 # -Publish is -Tag plus the remote half.
 if ($Publish) { $Tag = $true }
 
-if ($DryRun) {
+if ($isDryRun) {
     Write-Host ""
-    Write-Warn "DRY RUN - nothing will be written."
+    Write-Warn "DRY RUN - nothing will be written, tagged or published."
+    Write-Warn "Re-run the same command with -Apply to do it for real."
 }
 
 Write-Step "Reading manifest"
 if ($Version) {
-    Set-ManifestVersion -NewVersion $Version -WhatIf:$DryRun.IsPresent
+    Set-ManifestVersion -NewVersion $Version -WhatIf:$isDryRun
 }
 
 $manifest = Read-Manifest
@@ -390,10 +440,7 @@ $releaseVersion = if ($Version) { $Version } else { $manifest.version }
 Write-Note "$($manifest.name) $releaseVersion (manifest v$($manifest.manifest_version))"
 
 Write-Step "Validating"
-if ($Publish) {
-    Assert-PublishReady
-    Write-Note "gh authenticated, HEAD is on the remote"
-}
+if ($Publish) { Assert-PublishReady -Soft:$isDryRun }
 Assert-IconDimensions -Manifest $manifest
 Write-Note "icon dimensions match their declared sizes"
 
@@ -410,21 +457,29 @@ Write-Step "Packaging"
 $zipName = "claude-chat-clipper-$releaseVersion.zip"
 $zipPath = Join-Path $OutDir $zipName
 
-if (-not $DryRun -and -not (Test-Path -LiteralPath $OutDir)) {
+if (-not $isDryRun -and -not (Test-Path -LiteralPath $OutDir)) {
     New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 }
 
 foreach ($f in $files) { Write-Note $f }
-New-ReleaseZip -Files $files -ZipPath $zipPath -WhatIf:$DryRun.IsPresent
+New-ReleaseZip -Files $files -ZipPath $zipPath -WhatIf:$isDryRun
 
 if ($Tag) {
     Write-Step "Tagging"
-    New-ReleaseTag -TagName "v$releaseVersion" -WhatIf:$DryRun.IsPresent
+    New-ReleaseTag -TagName "v$releaseVersion" -WhatIf:$isDryRun
 }
 
 Write-Host ""
-if ($DryRun) {
+if ($isDryRun) {
+    if ($Publish) {
+        Write-Step "Publishing"
+        Publish-Release -TagName "v$releaseVersion" `
+                        -Assets @($zipPath, "${zipPath}.sha256") -WhatIf:$true
+        Write-Host ""
+    }
     Write-Warn "Dry run complete. Would have written $zipPath"
+    Write-Warn "Nothing was changed. Add -Apply to run it for real."
+
 }
 else {
     $zip = Get-Item -LiteralPath $zipPath

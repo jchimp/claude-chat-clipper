@@ -100,13 +100,14 @@ from a real conversation.
 ## Releases
 
 Packaging is one script. It validates the manifest, resolves what ships, and
-writes a versioned zip plus a SHA256 sidecar to `dist/`.
+writes a versioned zip plus a SHA256 sidecar to `dist/`. It is a dry run unless
+you pass `-Apply`.
 
 ```powershell
-.\scripts\release.ps1                          # build at the current manifest version
-.\scripts\release.ps1 -Version 1.2.0           # bump the manifest, then build
-.\scripts\release.ps1 -Version 1.2.0 -Publish  # bump, build, tag, push, publish to GitHub
-.\scripts\release.ps1 -DryRun                  # list what would ship, write nothing
+.\scripts\release.ps1                                 # dry run: report what would ship
+.\scripts\release.ps1 -Apply                          # build at the current manifest version
+.\scripts\release.ps1 -Version 1.2.0 -Apply           # bump the manifest, then build
+.\scripts\release.ps1 -Version 1.2.0 -Publish -Apply  # bump, build, tag, push, publish
 ```
 
 The file list is read from source rather than kept in the script: icon paths

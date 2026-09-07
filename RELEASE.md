@@ -14,11 +14,14 @@ That is the only setup. There is no CI to configure and no secrets to store.
 ## Cut a release
 
 ```powershell
-git push origin main                              # 1. get the commit on the remote
-.\scripts\release.ps1 -Version 1.2.0 -Publish     # 2. everything else
+git push origin main                                  # 1. get the commit on the remote
+.\scripts\release.ps1 -Version 1.2.0 -Publish         # 2. rehearse, read the output
+.\scripts\release.ps1 -Version 1.2.0 -Publish -Apply  # 3. do it
 ```
 
-Step 2 does, in order:
+**Nothing happens without `-Apply`.** Step 2 is a dry run: it validates
+everything, reports each thing it would do, and warns about anything that would
+block the release. Step 3 repeats the command with `-Apply` and does, in order:
 
 1. Sets `version` in `manifest.json` to 1.2.0.
 2. Validates the manifest and checks every file it is about to ship exists.
@@ -30,20 +33,24 @@ The commit has to be pushed first because the release is cut from the tagged
 commit. The script checks this and stops before building if `HEAD` is not on the
 remote yet.
 
-## Look before you leap
+## The dry run
 
-```powershell
-.\scripts\release.ps1 -Version 1.2.0 -DryRun
+Every command is a dry run until you add `-Apply`. A rehearsal reports all the
+blockers it finds rather than stopping at the first, so one run tells you
+everything standing between you and a release:
+
+```
+  ! would fail: -Publish needs an authenticated gh. Run: gh auth login
+  ! would fail: -Tag requires a clean working tree. Commit or stash first:
 ```
 
-Prints the version, the exact file list that would ship, and where the zip would
-go. Writes nothing, tags nothing, publishes nothing.
+`-DryRun` is still accepted, but it is redundant now.
 
 ## Build without publishing
 
 ```powershell
-.\scripts\release.ps1                  # zip at the current manifest version
-.\scripts\release.ps1 -Version 1.2.0   # bump and zip, no tag, no release
+.\scripts\release.ps1 -Apply                  # zip at the current manifest version
+.\scripts\release.ps1 -Version 1.2.0 -Apply   # bump and zip, no tag, no release
 ```
 
 ## When it stops
