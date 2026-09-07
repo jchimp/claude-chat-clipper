@@ -1,84 +1,102 @@
-# Claude Chat Clipper (Edge/Chrome, MV3)
+# Claude Chat Clipper
 
-Copy the open **claude.ai** conversation as Markdown or JSON, or download it as a
-`.md` file. No scrolling, no vault, no settings. Three buttons.
+A tiny browser extension that copies the open **claude.ai** conversation as
+Markdown or JSON, or downloads it as a `.md` file. Three buttons, no accounts,
+no settings, nothing leaves your browser.
 
-## What it does
+![MIT licensed](https://img.shields.io/badge/license-MIT-green.svg)
+![Manifest V3](https://img.shields.io/badge/manifest-v3-blue.svg)
 
-- **Copy as Markdown** — role-labelled transcript (`## 🧑 You` / `## 🤖 Claude`).
-  Claude's replies are already Markdown, so code fences, lists and tables come
-  through intact. Artifacts are rendered once, at their final version, as a
-  fenced code block. Thinking blocks and tool results are left out.
-- **Copy as JSON** — the full archive: every turn on the active branch with its
-  raw content blocks (text, thinking, tool_use, tool_result), timestamps,
-  attachments, model, and conversation id.
-- **Download .md** — the Markdown, saved to `Downloads/YYYY-MM-DD Title.md`
-  (dated by when the conversation started).
+## Why
 
-## How it works
+Claude's built-in export gives you a zip of everything, days later. Copying by
+hand loses code fences and mangles lists. Scraping the page misses turns
+because the chat is virtualised and streams. This extension asks claude.ai for
+the same JSON the page itself loads, so every turn on the branch you are
+looking at comes through, including the reply that just finished.
 
-claude.ai loads each conversation from its own JSON endpoint. The extension
-calls the same endpoint from inside the tab, so the request is same-origin and
-uses your existing login:
+## What you get
 
+| Button | Output |
+|--------|--------|
+| **Copy as Markdown** | Role-labelled transcript. Code fences, lists and tables intact. Artifacts rendered once at their final version. Thinking and tool noise left out. Paste into any editor or notes app. |
+| **Copy as JSON** | The full archive: every turn with its raw content blocks (text, thinking, tool calls, tool results), timestamps, attachments, model and conversation id. |
+| **Download .md** | The Markdown saved to `Downloads/YYYY-MM-DD Title.md`, dated by when the conversation started. |
+
+Sample Markdown output:
+
+````markdown
+# Sorting a list in Python
+
+- Source: https://claude.ai/chat/…
+- Model: claude-opus-5
+- Started: 2026-09-01T14:02:11Z
+- Clipped: 2026-09-06T09:40:03Z
+
+---
+
+## 🧑 You
+
+How do I sort a list of dicts by a key?
+
+## 🤖 Claude
+
+Use `sorted()` with a key function:
+
+```python
+rows = sorted(rows, key=lambda r: r["name"])
 ```
-GET /api/organizations/{orgId}/chat_conversations/{convId}?tree=True&rendering_mode=messages&render_all_tools=true
-```
+````
 
-`orgId` comes from the `lastActiveOrg` cookie, `convId` from the page URL. The
-response contains every branch; the clipper walks from
-`current_leaf_message_uuid` up the `parent_message_uuid` chain to export the
-branch you are looking at. This is why the latest reply is never missing: there
-is no DOM to be out of sync with.
+## Install
 
-If that request fails (endpoint renamed, not logged in), a small DOM scraper
-takes over and the status line says so. The DOM path cannot recover artifact
-contents and may be incomplete; treat it as a stopgap.
+Works in Edge and Chrome. It is not on a store; load it unpacked.
 
-## Install (unpacked)
+1. Download or clone this repo.
+2. Open `edge://extensions` (or `chrome://extensions`) and turn on
+   **Developer mode**.
+3. Click **Load unpacked** and select the repo folder.
+4. Open a conversation on claude.ai, click the toolbar icon, pick a button.
 
-1. `edge://extensions` (or `chrome://extensions`) → enable **Developer mode**.
-2. **Load unpacked** → select this folder.
-3. Open a conversation on claude.ai → click the toolbar icon → pick a button.
+The extension only asks for permission on `claude.ai`, plus clipboard and
+downloads. It has no background process and makes no network requests other
+than the one to claude.ai from inside your own tab.
 
-## Files
+## Privacy
 
-| File | Context | Role |
-|------|---------|------|
-| `manifest.json` | — | MV3 manifest, claude.ai host permissions |
-| `popup.html` / `popup.js` | popup | Buttons, clipboard, download |
-| `api.js` | page | Org id, conversation id, fetch JSON |
-| `transcript.js` | page | Raw JSON → normalized transcript → Markdown, filename |
-| `dom-fallback.js` | page | Structural scrape when the API fails |
-| `html2md.js` | page | HTML → Markdown (fallback only) |
-| `clip.js` | page | Entry point: API first, then fallback |
-| `test/transcript.html` | — | Offline tests for `transcript.js` |
+Everything runs inside the claude.ai tab you already have open, using your
+existing login. The extension has no server, no analytics, and no storage. What
+you copy goes to your clipboard or your Downloads folder and nowhere else.
 
-Page files are injected on demand with `chrome.scripting.executeScript`; each
-is an IIFE writing into `window.__claudeClipper`, so nothing leaks or collides.
+## How it works, briefly
 
-## Tests
+claude.ai loads each conversation from an internal JSON endpoint. The extension
+calls that same endpoint from inside the tab and walks the message tree from the
+current leaf to the root, which yields exactly the branch on screen. Claude's
+replies are already Markdown, so nothing is converted; artifacts are folded to
+their last version and emitted as fenced code.
 
-Open `test/transcript.html` over `file://`. Section A always runs. Section B
-runs against a recorded API response if present.
+If the request fails (endpoint changed, logged out), a small DOM scraper takes
+over and the status line says so. It is a stopgap: it cannot see artifact
+contents and may miss turns.
 
-### Recording a fixture
-
-On a claude.ai conversation, F12 → Console, paste:
-
-```js
-copy("window.FIXTURE_RAW = " + JSON.stringify(await (await fetch(
-  `/api/organizations/${document.cookie.match(/lastActiveOrg=([^;]+)/)[1]}` +
-  `/chat_conversations/${location.pathname.split("/chat/")[1]}` +
-  `?tree=True&rendering_mode=messages&render_all_tools=true`)).json(), null, 2) + ";")
-```
-
-Paste the clipboard into `test/fixtures/conversation.js`. Redact anything you do
-not want in the repo; the file is gitignored by default.
+Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Caveats
 
-- The endpoint is internal to claude.ai and unofficial. If it changes, the
-  fallback keeps you running and the status line tells you to look at `api.js`.
-- Clipping mid-stream captures the reply as far as the server has it.
-- Attachments are listed by filename only; their contents are not fetched.
+- The endpoint is internal to claude.ai and unofficial. If Anthropic changes
+  it, the fallback keeps you going and the fix lives in one file.
+- Clipping while a reply is still streaming captures it as far as the server
+  has it.
+- Attachments are listed by filename; their contents are not fetched.
+
+## Contributing
+
+Bug reports and pull requests are welcome. There is no build step: edit a file,
+reload the extension. Tests are one HTML page; see
+[docs/TESTING.md](docs/TESTING.md) for running them and recording a fixture
+from a real conversation.
+
+## License
+
+[MIT](LICENSE). Not affiliated with Anthropic.
