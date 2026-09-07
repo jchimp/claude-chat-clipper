@@ -90,6 +90,9 @@ from source, not kept in the script:
   a module does not silently omit it.
 - Everything else is a short allowlist in `scripts/release.ps1`.
 
+`INSTALL.md` ships alongside the code so the zip explains itself: it lands next
+to `manifest.json`, which is the folder a user points Edge at.
+
 That is what keeps `test/fixtures/` — which holds real conversations — out of a
 published artifact.
 

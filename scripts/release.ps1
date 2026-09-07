@@ -113,6 +113,7 @@ $StaticFiles = @(
     "manifest.json",
     "popup.html",
     "popup.js",
+    "INSTALL.md",   # end-user install steps; ships inside the zip
     "LICENSE"
 )
 
@@ -522,9 +523,15 @@ function Publish-Release {
     } | Out-Null
 
     Write-Note "creating GitHub release"
-    $exit = Invoke-Native -What "gh release create" -AllowFailure -Command {
-        gh release create $TagName @Assets --title $TagName --generate-notes --repo $RepoRoot
+    # gh resolves the repo from the git remote of its working directory, so run
+    # it there. (--repo takes OWNER/REPO, never a filesystem path.)
+    Push-Location $RepoRoot
+    try {
+        $exit = Invoke-Native -What "gh release create" -AllowFailure -Command {
+            gh release create $TagName @Assets --title $TagName --generate-notes
+        }
     }
+    finally { Pop-Location }
     if ($exit -ne 0) {
         throw ("gh release create failed with exit code $exit. The tag is pushed, so " +
                "fix the cause and finish with:`n" +

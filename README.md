@@ -52,6 +52,12 @@ rows = sorted(rows, key=lambda r: r["name"])
 
 Works in Edge and Chrome. It is not on a store; load it unpacked.
 
+Most people should grab the zip from the
+[latest release](https://github.com/jchimp/claude-chat-clipper/releases/latest)
+and follow the `INSTALL.md` inside it.
+
+To run from a clone instead:
+
 1. Download or clone this repo.
 2. Open `edge://extensions` (or `chrome://extensions`) and turn on
    **Developer mode**.
