@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Claude Chat Clipper — transcript tests</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem; }
+  li.pass { color: #1a7f37; }
+  li.fail { color: #cf222e; font-weight: bold; }
+  li.skip { color: #8a6d00; }
+  #summary { font-size: 1.2rem; margin-top: 1rem; }
+  pre { background: #f4f4f4; padding: .5rem; overflow-x: auto; }
+</style>
+</head>
+<body>
+<h1>Claude Chat Clipper — transcript tests</h1>
+<p>Open via <code>file://</code>. Section A checks the branch walk, artifact folding,
+fence escaping and filename rules with minimal structural inputs. Section B runs
+against a real API response if <code>test/fixtures/conversation.js</code> exists
+(see README → "Recording a fixture").</p>
+<ul id="results"></ul>
+<div id="summary"></div>
+
+<script src="../transcript.js"></script>
+<script src="fixtures/conversation.js"></script>
+<script>
+const NS = window.__claudeClipper;
+const results = document.getElementById("results");
+let passed = 0, failed = 0, skipped = 0;
+
+function check(name, cond, detail) {
+  const li = document.createElement("li");
+  li.className = cond ? "pass" : "fail";
+  li.textContent = (cond ? "PASS " : "FAIL ") + name + (cond ? "" : " — " + (detail || ""));
+  results.appendChild(li);
+  cond ? passed++ : failed++;
+}
+function skip(name, why) {
+  const li = document.createElement("li");
+  li.className = "skip";
+  li.textContent = "SKIP " + name + " — " + why;
+  results.appendChild(li);
+  skipped++;
+}
+
+// ---------------------------------------------------------------------------
+// A. Structural logic
+// ---------------------------------------------------------------------------
+const ROOT = "00000000-0000-4000-8000-000000000000";
+
+// A1. Branch walk: two branches off m1; leaf pointer selects m2b/m3b, not m2a.
+{
+  const raw = {
+    name: "t", current_leaf_message_uuid: "m3b",
+    chat_messages: [
+      { uuid: "m1",  parent_message_uuid: ROOT, sender: "human",     index: 0, content: [{ type: "text", text: "q1" }] },
+      { uuid: "m2a", parent_message_uuid: "m1", sender: "assistant", index: 1, content: [{ type: "text", text: "a1-old" }] },
+      { uuid: "m2b", parent_message_uuid: "m1", sender: "assistant", index: 2, content: [{ type: "text", text: "a1-new" }] },
+      { uuid: "m3b", parent_message_uuid: "m2b", sender: "human",    index: 3, content: [{ type: "text", text: "q2" }] },
+    ],
+  };
+  const t = NS.toTranscript(raw, "https://claude.ai/chat/x");
+  const ids = t.turns.map((x) => x.uuid).join(",");
+  check("A1 active branch follows leaf pointer", ids === "m1,m2b,m3b", "got " + ids);
+  check("A1 roles mapped", t.turns.map((x) => x.role).join(",") === "user,assistant,user");
+  check("A1 last turn is preserved", t.turns[t.turns.length - 1].uuid === "m3b");
+}
+
+// A2. No leaf pointer: falls back to index order.
+{
+  const raw = { chat_messages: [
+    { uuid: "b", parent_message_uuid: "a", sender: "assistant", index: 1, content: [] },
+    { uuid: "a", parent_message_uuid: ROOT, sender: "human",   index: 0, content: [] },
+  ]};
+  const t = NS.toTranscript(raw, "");
+  check("A2 index-order fallback", t.turns.map((x) => x.uuid).join(",") === "a,b");
+}
+
+// A3. Markdown: thinking omitted, text kept, artifact folded to final version.
+{
+  const raw = {
+    name: "t", current_leaf_message_uuid: "m2",
+    chat_messages: [
+      { uuid: "m1", parent_message_uuid: ROOT, sender: "human", content: [{ type: "text", text: "make it" }] },
+      { uuid: "m2", parent_message_uuid: "m1", sender: "assistant", content: [
+        { type: "thinking", thinking: "SECRET-THOUGHT" },
+        { type: "text", text: "Here you go." },
+        { type: "tool_use", name: "artifacts", input: { id: "art1", command: "create", type: "application/vnd.ant.code", language: "python", title: "demo.py", content: "x = 1\n" } },
+        { type: "tool_result", content: [{ type: "text", text: "OK" }] },
+        { type: "tool_use", name: "artifacts", input: { id: "art1", command: "update", old_str: "x = 1", new_str: "x = 2" } },
+        { type: "tool_use", name: "web_search", input: { query: "q" } },
+      ]},
+    ],
+  };
+  const t = NS.toTranscript(raw, "");
+  const md = NS.toMarkdown(t);
+  check("A3 thinking excluded from markdown", !md.includes("SECRET-THOUGHT"));
+  check("A3 thinking retained in JSON", JSON.stringify(t).includes("SECRET-THOUGHT"));
+  check("A3 text present", md.includes("Here you go."));
+  check("A3 artifact rendered once, final version", md.includes("```python\nx = 2\n```") && !md.includes("x = 1"), md);
+  check("A3 artifact title", md.includes("**Artifact: demo.py**"));
+  check("A3 non-artifact tool noted", md.includes("_Used tool: web_search_"));
+  check("A3 tool_result excluded", !md.includes("\nOK\n"));
+  check("A3 role headings", md.includes("## 🧑 You") && md.includes("## 🤖 Claude"));
+}
+
+// A4. Fence grows past embedded backtick runs.
+{
+  const raw = { current_leaf_message_uuid: "m", chat_messages: [
+    { uuid: "m", parent_message_uuid: ROOT, sender: "assistant", content: [
+      { type: "tool_use", name: "artifacts", input: { id: "a", command: "create", type: "text/markdown", content: "```js\nx\n```" } },
+    ]},
+  ]};
+  const md = NS.toMarkdown(NS.toTranscript(raw, ""));
+  check("A4 fence longer than content's backticks", md.includes("````markdown\n```js\nx\n```\n````"), md);
+}
+
+// A5. Filename: illegal chars stripped, dated by conversation start, capped.
+{
+  const t = { title: 'a/b:c*d?"e<f>g|h ' + "x".repeat(100), createdAt: "2026-03-04T10:00:00Z" };
+  const f = NS.buildFilename(t);
+  check("A5 filename starts with start date", f.startsWith("2026-03-04 "), f);
+  check("A5 illegal chars removed", !/[\\/:*?"<>|]/.test(f), f);
+  check("A5 length capped", f.length <= 80 + 11 + 3, String(f.length));
+  check("A5 empty title falls back", NS.buildFilename({ title: "" }).endsWith(" chat.md"));
+}
+
+// ---------------------------------------------------------------------------
+// B. Real fixture (optional)
+// ---------------------------------------------------------------------------
+if (window.FIXTURE_RAW) {
+  const raw = window.FIXTURE_RAW;
+  check("B1 fixture has chat_messages", Array.isArray(raw.chat_messages));
+  check("B1 messages carry uuid/parent/sender/content",
+    raw.chat_messages.every((m) => m.uuid && "parent_message_uuid" in m && m.sender && Array.isArray(m.content)));
+  const t = NS.toTranscript(raw, "https://claude.ai/chat/" + raw.uuid);
+  check("B2 transcript has turns", t.turns.length > 0);
+  check("B2 turn count <= message count", t.turns.length <= raw.chat_messages.length);
+  check("B2 alternates roles", t.turns.every((x, i) => i === 0 || x.role !== t.turns[i - 1].role),
+    t.turns.map((x) => x.role).join(","));
+  const md = NS.toMarkdown(t);
+  check("B3 markdown non-empty", md.length > 50);
+  check("B3 no thinking leaked",
+    !raw.chat_messages.some((m) => (m.content || []).some((b) => b.type === "thinking" && b.thinking && md.includes(b.thinking.slice(0, 80)))));
+  const pre = document.createElement("pre");
+  pre.textContent = md.slice(0, 3000) + (md.length > 3000 ? "\n…" : "");
+  document.body.appendChild(pre);
+} else {
+  skip("B fixture tests", "test/fixtures/conversation.js not found; see README to record one");
+}
+
+document.getElementById("summary").textContent =
+  failed === 0 ? `All ${passed} tests passed ✔${skipped ? ` (${skipped} skipped)` : ""}` : `${failed} FAILED, ${passed} passed`;
+document.title = (failed === 0 ? "PASS — " : "FAIL — ") + document.title;
+</script>
+</body>
+</html>
