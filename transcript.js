@@ -44,6 +44,7 @@
     return {
       schema: 1,
       source: "api",
+      assistant: "Claude",
       title: (raw.name || "").trim() || "Untitled conversation",
       model: raw.model || "",
       url: url || "",
@@ -170,7 +171,7 @@
 
     const artifactState = new Map();
     const body = t.turns.map((turn) => {
-      const label = turn.role === "user" ? "## 🧑 You" : "## 🤖 Claude";
+      const label = turn.role === "user" ? "## 🧑 You" : `## 🤖 ${t.assistant || "Claude"}`;
       const md = renderTurn(turn, artifactState);
       return `${label}\n\n${md || "_(no visible text)_"}`;
     });

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Claude Chat Clipper",
   "version": "1.1.0",
-  "description": "Copy a claude.ai conversation as Markdown or JSON, or download it as a .md file.",
+  "description": "Copy a claude.ai or ChatGPT conversation as Markdown or JSON, or download it as a .md file.",
   "permissions": [
     "activeTab",
     "scripting",
@@ -11,11 +11,14 @@
   ],
   "host_permissions": [
     "https://claude.ai/*",
-    "https://*.claude.ai/*"
+    "https://*.claude.ai/*",
+    "https://chatgpt.com/*",
+    "https://*.chatgpt.com/*",
+    "https://chat.openai.com/*"
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Clip this Claude conversation",
+    "default_title": "Clip this conversation",
     "default_icon": {
       "16": "icons/black/icon-16.png",
       "32": "icons/black/icon-32.png",

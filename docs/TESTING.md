@@ -22,6 +22,8 @@ minimal structural inputs:
 - non-artifact tool use noted, tool results skipped
 - fences grow past embedded backtick runs
 - filename dating and character stripping
+- ChatGPT provider (A6): `mapping` / `current_node` walk, role filtering,
+  adjacent-node merge, thoughts archived but not rendered
 
 **Section B** runs only if `test/fixtures/conversation.js` exists. It checks a
 real API response for the expected field names and renders the first part of
@@ -37,6 +39,19 @@ copy("window.FIXTURE_RAW = " + JSON.stringify(await (await fetch(
   `/chat_conversations/${location.pathname.split("/chat/")[1]}` +
   `?tree=True&rendering_mode=messages&render_all_tools=true`)).json(), null, 2) + ";")
 ```
+
+For ChatGPT, on a chatgpt.com conversation paste instead:
+
+```js
+copy("window.FIXTURE_RAW_CHATGPT = " + JSON.stringify(await (await fetch(
+  `/backend-api/conversation/${location.pathname.match(/\/c\/([0-9a-f-]{36})/)[1]}`,
+  { headers: { authorization: `Bearer ${(await (await fetch("/api/auth/session")).json()).accessToken}` } }
+)).json(), null, 2) + ";")
+```
+
+and save it as `test/fixtures/chatgpt-conversation.js` (also gitignored; the
+test page does not load it automatically yet, but it is the input to feed
+`NS.chatgpt.toTranscript` from the console when the endpoint shape changes).
 
 Paste the clipboard into `test/fixtures/conversation.js`. The file is
 gitignored, so nothing from your conversations ends up in the repo. Redact it
@@ -55,4 +70,7 @@ anyway if you plan to share it.
    the one on screen.
 6. **Download .md** and check the file lands in Downloads.
 7. If the status line ever says "DOM fallback", the API path failed. The
-   message includes the HTTP status or error; start in `api.js`.
+   message includes the HTTP status or error; start in `api.js` (claude.ai) or
+   `chatgpt.js` (chatgpt.com).
+8. Repeat 2, 3 and 6 on a chatgpt.com conversation, including one with
+   reasoning shown, and confirm the reply heading reads `## 🤖 ChatGPT`.

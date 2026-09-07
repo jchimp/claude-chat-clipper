@@ -102,6 +102,7 @@
     return {
       schema: 1,
       source: "dom",
+      assistant: "Claude",
       title: title(),
       model: model(),
       url: url || location.href,

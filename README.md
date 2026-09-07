@@ -1,7 +1,7 @@
 # Claude Chat Clipper
 
-A tiny browser extension that copies the open **claude.ai** conversation as
-Markdown or JSON, or downloads it as a `.md` file. Three buttons, no accounts,
+A tiny browser extension that copies the open **claude.ai** or **ChatGPT**
+conversation as Markdown or JSON, or downloads it as a `.md` file. Three buttons, no accounts,
 no settings, nothing leaves your browser.
 
 ![MIT licensed](https://img.shields.io/badge/license-MIT-green.svg)
@@ -62,16 +62,17 @@ To run from a clone instead:
 2. Open `edge://extensions` (or `chrome://extensions`) and turn on
    **Developer mode**.
 3. Click **Load unpacked** and select the repo folder.
-4. Open a conversation on claude.ai, click the toolbar icon, pick a button.
+4. Open a conversation on claude.ai or chatgpt.com, click the toolbar icon,
+   pick a button.
 
-The extension only asks for permission on `claude.ai`, plus clipboard and
-downloads. It has no background process and makes no network requests other
-than the one to claude.ai from inside your own tab.
+The extension only asks for permission on `claude.ai` and `chatgpt.com`, plus
+clipboard and downloads. It has no background process and makes no network
+requests other than the one to the chat site from inside your own tab.
 
 ## Privacy
 
-Everything runs inside the claude.ai tab you already have open, using your
-existing login. The extension has no server, no analytics, and no storage. What
+Everything runs inside the claude.ai or ChatGPT tab you already have open,
+using your existing login. The extension has no server, no analytics, and no storage. What
 you copy goes to your clipboard or your Downloads folder and nowhere else.
 
 ## How it works, briefly
@@ -86,12 +87,18 @@ If the request fails (endpoint changed, logged out), a small DOM scraper takes
 over and the status line says so. It is a stopgap: it cannot see artifact
 contents and may miss turns.
 
+ChatGPT works the same way: the extension reads the session token the page
+already holds and fetches the conversation from ChatGPT's own endpoint, walking
+`current_node` back to the root. Reasoning and tool output stay in the JSON but
+out of the Markdown. Canvas contents are not rendered yet.
+
 Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Caveats
 
-- The endpoint is internal to claude.ai and unofficial. If Anthropic changes
-  it, the fallback keeps you going and the fix lives in one file.
+- The endpoints are internal to claude.ai and chatgpt.com and unofficial. If
+  either vendor changes theirs, the fallback keeps you going and the fix lives
+  in one file (`api.js` or `chatgpt.js`).
 - Clipping while a reply is still streaming captures it as far as the server
   has it.
 - Attachments are listed by filename; their contents are not fetched.

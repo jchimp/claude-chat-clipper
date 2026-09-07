@@ -3,14 +3,19 @@
 const $ = (id) => document.getElementById(id);
 
 // Dependency order matters: clip.js calls into everything before it.
-const PAGE_FILES = ["html2md.js", "transcript.js", "dom-fallback.js", "api.js", "clip.js"];
+const PAGE_FILES = ["html2md.js", "transcript.js", "dom-fallback.js", "api.js", "chatgpt.js", "clip.js"];
 
 let lastError = "";
 
-function isClaudeUrl(url) {
+// Must match PROVIDERS in clip.js and host_permissions in manifest.json.
+function isSupportedUrl(url) {
   try {
     const host = new URL(url).hostname;
-    return host === "claude.ai" || host.endsWith(".claude.ai");
+    return (
+      host === "claude.ai" || host.endsWith(".claude.ai") ||
+      host === "chatgpt.com" || host.endsWith(".chatgpt.com") ||
+      host === "chat.openai.com"
+    );
   } catch {
     return false;
   }
@@ -78,9 +83,9 @@ async function init() {
     $("site").textContent = "";
   }
 
-  if (!isClaudeUrl(tab && tab.url)) {
+  if (!isSupportedUrl(tab && tab.url)) {
     ["copyMd", "copyJson", "download"].forEach((id) => { $(id).disabled = true; });
-    setStatus("Open a claude.ai conversation to clip it.");
+    setStatus("Open a claude.ai or ChatGPT conversation to clip it.");
     return;
   }
 
