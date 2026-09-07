@@ -1,28 +1,16 @@
-// popup.js
+// popup.js — toolbar UI. Injects the page bundle, calls window.__clipClaude(),
+// and hands the result to the clipboard or the Downloads folder.
 const $ = (id) => document.getElementById(id);
 
-const DEFAULT_SETTINGS = {
-  tags: "ai/chat",
-  filenamePattern: "{date} {title}",
-};
+// Dependency order matters: clip.js calls into everything before it.
+const PAGE_FILES = ["html2md.js", "transcript.js", "dom-fallback.js", "api.js", "clip.js"];
 
-async function getSettings() {
-  const s = await chrome.storage.local.get("settings");
-  return { ...DEFAULT_SETTINGS, ...(s.settings || {}) };
-}
+let lastError = "";
 
-// Mirrors manifest.json host_permissions — the only hosts we can actually
-// inject into / have an adapter for. Guarding here avoids attempting
-// injection on privileged pages (chrome://, the extensions gallery, etc.),
-// which throws "The extensions gallery cannot be scripted."
-const SUPPORTED_HOSTS = [
-  /(^|\.)claude\.ai$/,
-  /^copilot\.microsoft\.com$/,
-  /(^|\.)cloud\.microsoft$/,
-];
-function isSupportedUrl(url) {
+function isClaudeUrl(url) {
   try {
-    return SUPPORTED_HOSTS.some((re) => re.test(new URL(url).hostname));
+    const host = new URL(url).hostname;
+    return host === "claude.ai" || host.endsWith(".claude.ai");
   } catch {
     return false;
   }
@@ -39,212 +27,90 @@ function setStatus(msg, kind = "") {
   el.className = "status " + kind;
 }
 
-function formatDiag(d, url) {
-  if (!d) return "Diagnostics: (no data returned)";
-  if (!d.ok) {
-    return [
-      "Obsidian Chat Clipper diagnostics",
-      "URL: " + url,
-      "host: " + d.host,
-      "ERROR: " + (d.error || "unknown"),
-    ].join("\n");
-  }
-  const lines = [
-    "Obsidian Chat Clipper diagnostics",
-    "URL: " + url,
-    "host: " + d.host,
-    "adapter: " + d.adapter,
-    "title guess: " + (d.title || "(none)"),
-    "",
-    "user turns matched: " + d.userMatched,
-    "assistant turns matched: " + d.assistantMatched,
-    ...(d.turnsThrew ? ["turns() threw: " + d.turnsThrew] : []),
-    ...(d.genericCounts ? ["generic fallback sees: " + d.genericCounts] : []),
-    "",
-    "ROOT selectors:",
-    ...d.root.map((r) => `  [${r.matched ? "MATCH" : "  -  "}] ${r.sel}`),
-    "",
-    "SCROLL selectors:",
-    ...d.scroll.map((r) => `  [${r.matched ? "MATCH" : "  -  "}] ${r.sel}`),
-    "",
-    "scroll container in use:",
-    "  " + (d.scrollInfo || "(none)"),
-    "",
-    "sample turn outerHTML:",
-    "  " + (d.sampleTurn || "(none)"),
-    "",
-    "all data-testid values on page:",
-    "  " + (d.testids.length ? d.testids.join(", ") : "(none)"),
-    "",
-    "top class names inside root:",
-    ...d.topClasses.map((c) => "  " + c),
-  ];
-  return lines.join("\n");
+function showError(msg) {
+  lastError = msg;
+  $("copyErr").hidden = false;
+  setStatus(msg, "err");
 }
 
 async function extract(tabId) {
-  // Inject helpers only once per page load — re-running files with top-level
-  // `const` declarations throws "already declared" on the 2nd click.
+  // Inject once per page load. Every page file is an IIFE writing into
+  // window.__claudeClipper, so a re-inject would be harmless but wasteful.
   const [{ result: ready }] = await chrome.scripting.executeScript({
     target: { tabId },
-    func: () => typeof window.__clipExtract === "function",
+    func: () => typeof window.__clipClaude === "function",
   });
   if (!ready) {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ["normalize.js", "adapters.js", "html2md.js", "clipper-extract.js"],
-    });
+    await chrome.scripting.executeScript({ target: { tabId }, files: PAGE_FILES });
   }
-  // __clipExtract is async (it scrolls + harvests); executeScript awaits the
-  // returned promise and hands back the resolved value.
   const [{ result }] = await chrome.scripting.executeScript({
     target: { tabId },
-    func: () => window.__clipExtract(),
+    func: () => window.__clipClaude(),
   });
   return result;
+}
+
+function summary(data) {
+  const n = data.transcript.turns.length;
+  const src = data.transcript.source === "api" ? "" : ` via ${data.transcript.source}`;
+  return `${n} turns${src}`;
+}
+
+async function run(tab, action) {
+  $("copyErr").hidden = true;
+  setStatus("Fetching conversation…");
+  try {
+    const data = await extract(tab.id);
+    if (!data) throw new Error("No result from page (is the tab still loading?).");
+    if (!data.ok) throw new Error(data.error || "Could not read this conversation.");
+    const done = await action(data);
+    setStatus(`${done} (${summary(data)}).${data.warning ? " " + data.warning : ""}`, data.warning ? "warn" : "ok");
+  } catch (err) {
+    showError("Error: " + (err && err.message ? err.message : String(err)));
+  }
 }
 
 async function init() {
   const tab = await activeTab();
   try {
-    const host = new URL(tab.url).hostname;
-    $("site").textContent = host;
+    $("site").textContent = new URL(tab.url).hostname;
   } catch {
     $("site").textContent = "";
   }
 
-  $("openOptions").addEventListener("click", (e) => {
-    e.preventDefault();
-    chrome.runtime.openOptionsPage();
-  });
-
-  if (!isSupportedUrl(tab && tab.url)) {
-    ["clip", "copy", "diag"].forEach((id) => {
-      $(id).disabled = true;
-    });
-    setStatus("Open a Claude or Copilot chat to clip.", "");
+  if (!isClaudeUrl(tab && tab.url)) {
+    ["copyMd", "copyJson", "download"].forEach((id) => { $(id).disabled = true; });
+    setStatus("Open a claude.ai conversation to clip it.");
     return;
   }
 
-  $("diag").addEventListener("click", async () => {
-    setStatus("Running diagnostics…");
-    try {
-      // Inject helpers once (same pattern as extract), then read diagnostics.
-      const [{ result: ready }] = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: () => typeof window.__clipDiagData === "function",
-      });
-      if (!ready) {
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          files: ["normalize.js", "adapters.js", "html2md.js", "clipper-extract.js"],
-        });
-      }
-      const [{ result: d }] = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: () => window.__clipDiagData(),
-      });
+  $("copyMd").addEventListener("click", () =>
+    run(tab, async (data) => {
+      await navigator.clipboard.writeText(data.markdown);
+      return "Markdown copied";
+    })
+  );
 
-      const text = formatDiag(d, tab.url);
-      await navigator.clipboard.writeText(text);
-      if (d && d.ok) {
-        setStatus(
-          `Copied. user=${d.userMatched}, assistant=${d.assistantMatched}. Paste it to Claude.`,
-          "ok"
-        );
-      } else {
-        setStatus("Copied diagnostics to clipboard. Paste it to Claude.", "ok");
-      }
-    } catch (err) {
-      setStatus("Error: " + err.message, "err");
-    }
-  });
+  $("copyJson").addEventListener("click", () =>
+    run(tab, async (data) => {
+      await navigator.clipboard.writeText(JSON.stringify(data.transcript, null, 2));
+      return "JSON copied";
+    })
+  );
 
-  $("clip").addEventListener("click", async () => {
-    try {
-      // Ask for vault permission NOW, while the click is still "fresh". Doing
-      // this before the multi-second scroll avoids the user-activation error.
-      const handle = await getVaultHandle();
-      if (handle && !(await hasPermission(handle))) {
-        setStatus("Confirm folder access…");
-        await requestPermissionNow(handle); // tolerated if it fails -> download
-      }
+  $("download").addEventListener("click", () =>
+    run(tab, async (data) => {
+      // data: URL rather than a blob URL so nothing has to be revoked after
+      // the popup closes.
+      const url = "data:text/markdown;charset=utf-8," + encodeURIComponent(data.markdown);
+      await chrome.downloads.download({ url, filename: data.filename, saveAs: false });
+      return "Saved to Downloads/" + data.filename;
+    })
+  );
 
-      setStatus("Collecting full conversation (auto-scrolling)…");
-      const data = await extract(tab.id);
-      if (!data || !data.ok) {
-        // Hand the user the fix material: diagnostics were computed in-page
-        // at the moment of failure — copy them so one paste re-tunes the
-        // selector instead of a manual Diagnose round-trip.
-        if (data && data.diag) {
-          try { await navigator.clipboard.writeText(formatDiag(data.diag, tab.url)); } catch {}
-          setStatus(
-            ((data && data.error) || "Could not read this page.") +
-              " — diagnostics copied; paste to Claude to fix the selector.",
-            "err"
-          );
-          return;
-        }
-        setStatus((data && data.error) || "Could not read this page.", "err");
-        return;
-      }
-      const settings = await getSettings();
-      const md = buildNote(data, settings);
-      const filename = buildFilename(data, settings);
-      const res = await writeNote(filename, md);
-      const n = (data.stats && data.stats.turns) || 0;
-      const got = n ? ` (${n} turns)` : " (whole-page mode)";
-      // Saved, but via a degraded capture path (generic/whole-root): the note
-      // is on disk, so the clipboard is free for the diagnostics.
-      let degradedNote = "";
-      if (data.diag) {
-        try {
-          await navigator.clipboard.writeText(formatDiag(data.diag, tab.url));
-          degradedNote = " Degraded capture — diagnostics copied; paste to Claude to fix the selector.";
-        } catch {}
-      }
-      if (res.method === "vault") {
-        setStatus("Saved to vault: " + res.path + got + degradedNote, "ok");
-      } else {
-        setStatus(
-          "Saved to " + res.path + got + " — re-grant the vault folder in Settings to save there directly." + degradedNote,
-          "ok"
-        );
-      }
-    } catch (err) {
-      setStatus("Error: " + err.message, "err");
-    }
-  });
-
-  $("copy").addEventListener("click", async () => {
-    setStatus("Collecting full conversation (auto-scrolling)…");
-    try {
-      const data = await extract(tab.id);
-      if (!data || !data.ok) {
-        // On failure the clipboard is free — copy the diagnostics instead.
-        if (data && data.diag) {
-          try { await navigator.clipboard.writeText(formatDiag(data.diag, tab.url)); } catch {}
-          setStatus(
-            ((data && data.error) || "Could not read this page.") +
-              " — diagnostics copied; paste to Claude to fix the selector.",
-            "err"
-          );
-          return;
-        }
-        setStatus((data && data.error) || "Could not read this page.", "err");
-        return;
-      }
-      const settings = await getSettings();
-      const md = buildNote(data, settings);
-      // The user asked for the NOTE in the clipboard — never clobber it with
-      // diagnostics, even on a degraded capture; just flag it in the status.
-      await navigator.clipboard.writeText(md);
-      const n = (data.stats && data.stats.turns) || 0;
-      const degraded = data.diag ? " Degraded capture — use Diagnose for selector info." : "";
-      setStatus("Copied to clipboard" + (n ? ` (${n} turns).` : ".") + degraded, "ok");
-    } catch (err) {
-      setStatus("Error: " + err.message, "err");
-    }
+  $("copyErr").addEventListener("click", async () => {
+    await navigator.clipboard.writeText(`Claude Chat Clipper\nURL: ${tab.url}\n${lastError}`);
+    setStatus("Error details copied.", "ok");
   });
 }
 
