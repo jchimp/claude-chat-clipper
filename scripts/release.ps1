@@ -301,9 +301,34 @@ function New-ReleaseTag {
         $problems.Add("-Tag requires a clean working tree. Commit or stash first:`n$status")
     }
 
-    $existing = git -C $RepoRoot tag --list $TagName
-    if ($existing) {
-        $problems.Add("Tag $TagName already exists. Delete it or pick another version.")
+    # Local and remote tags are separate things, and deleting a release on
+    # GitHub leaves the local tag behind. Report which copy is in the way, so
+    # the fix is not a guess.
+    $localTag = [bool](git -C $RepoRoot tag --list $TagName)
+
+    $remoteTag = $false
+    $hasRemote = [bool](git -C $RepoRoot remote 2>$null)
+    if ($hasRemote) {
+        $lsRemote = $null
+        $exit = Invoke-Native -What "git ls-remote" -AllowFailure -Command {
+            $script:lsRemote = git -C $RepoRoot ls-remote --tags origin $TagName 2>$null
+        }
+        if ($exit -eq 0) { $remoteTag = [bool]$lsRemote }
+        else { Write-Warn "could not reach the remote to check for tag $TagName" }
+    }
+
+    if ($localTag -and $remoteTag) {
+        $problems.Add("Tag $TagName already exists locally and on the remote. Pick another version, or:`n" +
+                      "    gh release delete $TagName --cleanup-tag --yes`n" +
+                      "    git tag -d $TagName")
+    }
+    elseif ($localTag) {
+        $problems.Add("Tag $TagName exists locally but not on the remote. If you deleted it on GitHub, " +
+                      "remove the local copy too:`n    git tag -d $TagName")
+    }
+    elseif ($remoteTag) {
+        $problems.Add("Tag $TagName already exists on the remote. Pick another version, or:`n" +
+                      "    gh release delete $TagName --cleanup-tag --yes")
     }
 
     if ($problems.Count -gt 0) {
