@@ -313,17 +313,23 @@ function New-ReleaseTag {
     # Local and remote tags are separate things, and deleting a release on
     # GitHub leaves the local tag behind. Report which copy is in the way, so
     # the fix is not a guess.
-    $localTag = [bool](git -C $RepoRoot tag --list $TagName)
+    $localTag = [bool](Get-GitOutput @("tag", "--list", $TagName))
 
     $remoteTag = $false
-    $hasRemote = [bool](git -C $RepoRoot remote 2>$null)
-    if ($hasRemote) {
-        $lsRemote = $null
-        $exit = Invoke-Native -What "git ls-remote" -AllowFailure -Command {
-            $script:lsRemote = git -C $RepoRoot ls-remote --tags origin $TagName 2>$null
+    if (Get-GitOutput @("remote")) {
+        # Distinguish "no such tag" from "could not ask": both come back empty,
+        # but only one of them means the tag is free to use.
+        $reachable = Get-GitOutput @("ls-remote", "--exit-code", "--tags", "origin", $TagName)
+        if ($reachable) {
+            $remoteTag = $true
         }
-        if ($exit -eq 0) { $remoteTag = [bool]$lsRemote }
-        else { Write-Warn "could not reach the remote to check for tag $TagName" }
+        else {
+            # --exit-code returns 2 for "no matching ref" and non-zero for real
+            # failures, so confirm the remote answers at all before trusting it.
+            if ($null -eq (Get-GitOutput @("ls-remote", "--heads", "origin"))) {
+                Write-Warn "could not reach the remote to check for tag $TagName"
+            }
+        }
     }
 
     if ($localTag -and $remoteTag) {
@@ -374,12 +380,21 @@ function Invoke-Native {
 
     $previous = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
-    try { & $Command } finally { $ErrorActionPreference = $previous }
-
-    if (-not $AllowFailure -and $LASTEXITCODE -ne 0) {
-        throw "$What failed with exit code $LASTEXITCODE."
+    try {
+        # Send whatever the command prints straight to the console. Letting it
+        # fall into this function's output stream would concatenate it with the
+        # exit code returned below, so a caller comparing the result to 0 would
+        # be comparing an array - and a successful command would look failed.
+        & $Command | Out-Host
     }
-    return $LASTEXITCODE
+    finally { $ErrorActionPreference = $previous }
+
+    $code = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+
+    if (-not $AllowFailure -and $code -ne 0) {
+        throw "$What failed with exit code $code."
+    }
+    return $code
 }
 
 function Get-GitOutput {
