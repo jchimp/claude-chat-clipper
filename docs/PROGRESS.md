@@ -11,7 +11,7 @@ Claude-only, API-first clipper is written and passes offline tests. Needs a live
 - [ ] Load unpacked in Edge and verify last assistant turn present via Copy JSON
 - [ ] Record a real API response into test/fixtures/conversation.js and run section B
 - [ ] Verify artifact folding and branch selection on real conversations
-- [ ] Rename repo folder from obsidian-chat-clipper (Dropbox path)
+- [ ] Rename repo and GitHub remote from obsidian-chat-clipper
 
 ## Progress Log
 
@@ -22,3 +22,4 @@ Claude-only, API-first clipper is written and passes offline tests. Needs a live
 - Removed vault, options page, frontmatter scaffold, and all Copilot code (about 1700 lines down to about 650).
 - 17 offline assertions pass in headless Edge; real-fixture section skipped until a response is recorded.
 - Next: live verification on a logged-in tab, then commit.
+- Made public-ready: friendly README, MIT LICENSE, tests and fixture notes moved to docs/TESTING.md.
