@@ -146,3 +146,6 @@ Thumbs.db
 
 #=== Misc & Runtime ===
 tempCodeRunnerFile.py
+
+#=== Recorded test fixtures (real conversations) ===
+test/fixtures/*.js
