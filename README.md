@@ -1,83 +1,84 @@
-# Obsidian Chat Clipper (Edge, MV3)
+# Claude Chat Clipper (Edge/Chrome, MV3)
 
-Capture a **Claude.ai** or **Microsoft Copilot** conversation as clean Markdown,
-pre-scaffolded with a notes block + highlights section, and drop it straight into
-your Obsidian vault.
+Copy the open **claude.ai** conversation as Markdown or JSON, or download it as a
+`.md` file. No scrolling, no vault, no settings. Three buttons.
 
 ## What it does
 
-- One click → reads the open conversation, converts it to Markdown.
-- Writes a `.md` into your chosen vault folder (or downloads it if no folder is set).
-- Every note starts with YAML frontmatter, a `> [!note] My notes` callout, a
-  `## ⭐ Highlights` section, then the `## Transcript`. Annotate, done.
-- "Copy as Markdown" if you'd rather paste it yourself.
+- **Copy as Markdown** — role-labelled transcript (`## 🧑 You` / `## 🤖 Claude`).
+  Claude's replies are already Markdown, so code fences, lists and tables come
+  through intact. Artifacts are rendered once, at their final version, as a
+  fenced code block. Thinking blocks and tool results are left out.
+- **Copy as JSON** — the full archive: every turn on the active branch with its
+  raw content blocks (text, thinking, tool_use, tool_result), timestamps,
+  attachments, model, and conversation id.
+- **Download .md** — the Markdown, saved to `Downloads/YYYY-MM-DD Title.md`
+  (dated by when the conversation started).
 
-## Install in Edge (unpacked)
+## How it works
 
-1. `edge://extensions` → turn on **Developer mode** (left sidebar).
+claude.ai loads each conversation from its own JSON endpoint. The extension
+calls the same endpoint from inside the tab, so the request is same-origin and
+uses your existing login:
+
+```
+GET /api/organizations/{orgId}/chat_conversations/{convId}?tree=True&rendering_mode=messages&render_all_tools=true
+```
+
+`orgId` comes from the `lastActiveOrg` cookie, `convId` from the page URL. The
+response contains every branch; the clipper walks from
+`current_leaf_message_uuid` up the `parent_message_uuid` chain to export the
+branch you are looking at. This is why the latest reply is never missing: there
+is no DOM to be out of sync with.
+
+If that request fails (endpoint renamed, not logged in), a small DOM scraper
+takes over and the status line says so. The DOM path cannot recover artifact
+contents and may be incomplete; treat it as a stopgap.
+
+## Install (unpacked)
+
+1. `edge://extensions` (or `chrome://extensions`) → enable **Developer mode**.
 2. **Load unpacked** → select this folder.
-3. The options page opens. Click **Choose vault folder…** and pick the folder
-   *inside* your vault where clips should live (e.g. `YourVault/AI-Chats`).
-   Set default tags / filename pattern if you like. Save.
-4. Open a chat on claude.ai or copilot.microsoft.com → click the toolbar icon →
-   **Clip to Obsidian**.
-
-> The vault folder uses the File System Access API. You grant it once; the
-> handle is remembered. On the first clip after a browser restart it may ask you
-> to confirm write access again (one click). If you never set a folder, clips
-> download to `Downloads/AI-Chats/`.
-
-## The only thing you may need to tune: selectors
-
-I built this without access to the live pages, so the per-site **root selector**
-is a best guess. If a clip comes back empty or messy:
-
-1. Open the conversation, press **F12 → Console**.
-2. Click the extension once (this injects the helpers), then run:
-   ```js
-   __clipDiag()
-   ```
-   It prints which selectors currently match and how many turns it found.
-3. If `root` shows ❌: right-click the message area → **Inspect**, find the
-   smallest element that wraps the whole conversation, and add its selector to
-   the **front** of `ROOT_SELECTORS` for that site in `adapters.js`.
-4. For nice `## You / ## Assistant` splitting, do the same for `TURN_SELECTORS`
-   (one selector that matches user turns, one for assistant turns). If turn
-   detection finds nothing, it falls back to dumping the whole conversation as
-   one block — still useful, just unlabelled.
-5. Reload the page.
-
-Everything tunable lives in **`adapters.js`** and nowhere else.
+3. Open a conversation on claude.ai → click the toolbar icon → pick a button.
 
 ## Files
 
-| File | Role |
-|------|------|
-| `manifest.json` | MV3 manifest, permissions, host matches |
-| `adapters.js` | **Per-site selectors — the one file to tune** |
-| `clipper-extract.js` | Runs in the page; pulls the conversation |
-| `html2md.js` | HTML → Markdown converter |
-| `normalize.js` | Claude-only Markdown tidy-up (strips UI chrome, blank lines) |
-| `note.js` | Frontmatter + notes/highlights scaffold + filename |
-| `vault.js` | Writes to the vault folder (FS Access API) or downloads |
-| `popup.js` / `popup.html` | Toolbar UI |
-| `options.js` / `options.html` | Vault folder + settings |
-| `background.js` | Opens options on install |
+| File | Context | Role |
+|------|---------|------|
+| `manifest.json` | — | MV3 manifest, claude.ai host permissions |
+| `popup.html` / `popup.js` | popup | Buttons, clipboard, download |
+| `api.js` | page | Org id, conversation id, fetch JSON |
+| `transcript.js` | page | Raw JSON → normalized transcript → Markdown, filename |
+| `dom-fallback.js` | page | Structural scrape when the API fails |
+| `html2md.js` | page | HTML → Markdown (fallback only) |
+| `clip.js` | page | Entry point: API first, then fallback |
+| `test/transcript.html` | — | Offline tests for `transcript.js` |
 
-## Honest caveats
+Page files are injected on demand with `chrome.scripting.executeScript`; each
+is an IIFE writing into `window.__claudeClipper`, so nothing leaks or collides.
 
-- Claude and Copilot are **unofficial** targets. Their markup changes; when it
-  does, you tune one selector (above), not the whole extension.
-- Consumer `copilot.microsoft.com` and enterprise **M365 Copilot business chat**
-  (`m365.cloud.microsoft`) are different surfaces. The consumer one is the easy
-  case; the business one may be locked down by your tenant.
-- The bundled HTML→MD converter is "good for notes," not pixel-perfect. If you
-  want exact fidelity (edge-case tables, nested formatting), drop in
-  [Turndown](https://github.com/mixmark-io/turndown) and call it from
-  `html2md.js`.
+## Tests
 
-## If you outgrow v1
+Open `test/transcript.html` over `file://`. Section A always runs. Section B
+runs against a recorded API response if present.
 
-Swap the `writeNote()` download/FS-Access path for a POST to a tiny local
-FastAPI `/ingest` endpoint. That shim can own templating, dedupe, git commits,
-and fan-out (Obsidian + Telegram), and unify any future surfaces behind one pipe.
+### Recording a fixture
+
+On a claude.ai conversation, F12 → Console, paste:
+
+```js
+copy("window.FIXTURE_RAW = " + JSON.stringify(await (await fetch(
+  `/api/organizations/${document.cookie.match(/lastActiveOrg=([^;]+)/)[1]}` +
+  `/chat_conversations/${location.pathname.split("/chat/")[1]}` +
+  `?tree=True&rendering_mode=messages&render_all_tools=true`)).json(), null, 2) + ";")
+```
+
+Paste the clipboard into `test/fixtures/conversation.js`. Redact anything you do
+not want in the repo; the file is gitignored by default.
+
+## Caveats
+
+- The endpoint is internal to claude.ai and unofficial. If it changes, the
+  fallback keeps you running and the status line tells you to look at `api.js`.
+- Clipping mid-stream captures the reply as far as the server has it.
+- Attachments are listed by filename only; their contents are not fetched.
