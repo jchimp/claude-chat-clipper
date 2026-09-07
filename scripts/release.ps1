@@ -26,6 +26,11 @@
     After a successful build, create the annotated git tag v<version>.
     Requires a clean working tree. Does not push - see the printed hint.
 
+.PARAMETER Publish
+    Do the whole release: build, tag, push the tag, then create the GitHub
+    release and upload the zip and its checksum as assets. Implies -Tag.
+    Needs the gh CLI, authenticated (gh auth login).
+
 .PARAMETER OutDir
     Directory to write the zip into. Defaults to dist/ at the repo root.
 
@@ -41,6 +46,11 @@
     Bump the manifest to 1.1.0, build, and tag the commit v1.1.0.
 
 .EXAMPLE
+    .\scripts\release.ps1 -Version 1.1.0 -Publish
+    Bump, build, tag, push the tag, and publish the GitHub release with the
+    zip attached. This is the one-command release.
+
+.EXAMPLE
     .\scripts\release.ps1 -Version 1.1.0 -DryRun
     Show what a 1.1.0 release would contain, changing nothing.
 #>
@@ -51,6 +61,8 @@ param(
     [string]$Version,
 
     [switch]$Tag,
+
+    [switch]$Publish,
 
     [string]$OutDir,
 
@@ -280,7 +292,87 @@ function New-ReleaseTag {
     Write-Note "created annotated tag $TagName"
 }
 
+function Invoke-Native {
+    <#
+        Runs a native command and checks its exit code.
+
+        $ErrorActionPreference = "Stop" turns anything a native command writes
+        to stderr into a terminating error, and git and gh both write ordinary
+        progress there on success. So drop to Continue for the call itself and
+        judge the result by exit code, which is the only reliable signal.
+    #>
+    param(
+        [Parameter(Mandatory)][scriptblock]$Command,
+        [Parameter(Mandatory)][string]$What,
+        [switch]$AllowFailure
+    )
+
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { & $Command } finally { $ErrorActionPreference = $previous }
+
+    if (-not $AllowFailure -and $LASTEXITCODE -ne 0) {
+        throw "$What failed with exit code $LASTEXITCODE."
+    }
+    return $LASTEXITCODE
+}
+
+function Assert-PublishReady {
+    <#
+        Checked before anything is built, so a missing prerequisite fails in
+        two seconds rather than after a tag has already been created.
+    #>
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+        throw "-Publish needs the GitHub CLI. Install it, then run: gh auth login"
+    }
+
+    $authed = Invoke-Native -What "gh auth status" -AllowFailure -Command { gh auth status *> $null }
+    if ($authed -ne 0) {
+        throw "-Publish needs an authenticated gh. Run: gh auth login"
+    }
+
+    # The release is cut from the tagged commit, so that commit has to be on
+    # the remote already. Otherwise the tag pushes fine but points at work
+    # nobody else can see.
+    $onRemote = git -C $RepoRoot branch -r --contains HEAD 2>$null
+    if (-not $onRemote) {
+        throw "HEAD is not on the remote yet. Push your branch first, then release."
+    }
+}
+
+function Publish-Release {
+    param(
+        [Parameter(Mandatory)][string]$TagName,
+        [Parameter(Mandatory)][string[]]$Assets,
+        [Parameter(Mandatory)][bool]$WhatIf
+    )
+
+    if ($WhatIf) {
+        Write-Note "would push $TagName and create the GitHub release"
+        foreach ($a in $Assets) { Write-Note "  asset: $(Split-Path -Leaf $a)" }
+        return
+    }
+
+    Write-Note "pushing $TagName"
+    Invoke-Native -What "git push origin $TagName" -Command {
+        git -C $RepoRoot push origin $TagName
+    } | Out-Null
+
+    Write-Note "creating GitHub release"
+    $exit = Invoke-Native -What "gh release create" -AllowFailure -Command {
+        gh release create $TagName @Assets --title $TagName --generate-notes --repo $RepoRoot
+    }
+    if ($exit -ne 0) {
+        throw ("gh release create failed with exit code $exit. The tag is pushed, so " +
+               "fix the cause and finish with:`n" +
+               "  gh release create $TagName " + ($Assets -join ' ') + " --generate-notes")
+    }
+}
+
 # ---------------------------------------------------------------------------
+
+# -Publish is -Tag plus the remote half.
+if ($Publish) { $Tag = $true }
 
 if ($DryRun) {
     Write-Host ""
@@ -298,6 +390,10 @@ $releaseVersion = if ($Version) { $Version } else { $manifest.version }
 Write-Note "$($manifest.name) $releaseVersion (manifest v$($manifest.manifest_version))"
 
 Write-Step "Validating"
+if ($Publish) {
+    Assert-PublishReady
+    Write-Note "gh authenticated, HEAD is on the remote"
+}
 Assert-IconDimensions -Manifest $manifest
 Write-Note "icon dimensions match their declared sizes"
 
@@ -337,15 +433,26 @@ else {
 
     $sizeKb = [math]::Round($zip.Length / 1024, 1)
 
-    Write-Step "Done"
     Write-Note "$zipPath  ($sizeKb KB)"
     Write-Note "SHA256 $hash"
 
-    if ($Tag) {
+    if ($Publish) {
+        Write-Step "Publishing"
+        Publish-Release -TagName "v$releaseVersion" -Assets @($zipPath, "${zipPath}.sha256") -WhatIf:$false
+        Write-Step "Done"
+        Write-Note "Release v$releaseVersion is live with the zip attached."
+        Write-Note "  gh release view v$releaseVersion --web"
+    }
+    elseif ($Tag) {
+        Write-Step "Done"
         Write-Host ""
-        Write-Note "Push the tag and publish when ready:"
+        Write-Note "Tag created locally. Push and publish when ready:"
         Write-Note "  git push origin v$releaseVersion"
         Write-Note "  gh release create v$releaseVersion `"$zipPath`" `"${zipPath}.sha256`" --generate-notes"
+        Write-Note "Or re-run with -Publish next time to do both."
+    }
+    else {
+        Write-Step "Done"
     }
 }
 Write-Host ""
