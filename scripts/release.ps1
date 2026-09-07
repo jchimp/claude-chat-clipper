@@ -37,6 +37,10 @@
 .PARAMETER OutDir
     Directory to write the zip into. Defaults to dist/ at the repo root.
 
+.PARAMETER ReleaseBranch
+    Branch releases are cut from. Defaults to whatever the remote reports as
+    its default branch, falling back to main. Only consulted with -Publish.
+
 .PARAMETER Apply
     Actually do the work. Without it the script is a dry run: it validates and
     reports exactly what would happen, but writes, tags and publishes nothing.
@@ -80,6 +84,9 @@ param(
 
     [string]$OutDir,
 
+    # Branch releases are cut from. Defaults to the remote's default branch.
+    [string]$ReleaseBranch,
+
     [switch]$Apply,
 
     # Redundant: dry run is the default. Accepted so typing it still works.
@@ -98,6 +105,7 @@ $isDryRun = -not $Apply
 # path in this file is resolved against $RepoRoot, not the script dir.
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 if (-not $OutDir) { $OutDir = Join-Path $RepoRoot "dist" }
+
 
 # Files that always ship, independent of manifest contents. The injected page
 # bundle and the icons are resolved from source further down.
@@ -373,6 +381,44 @@ function Invoke-Native {
     return $LASTEXITCODE
 }
 
+function Get-GitOutput {
+    <#
+        Runs git and returns its trimmed stdout, or $null if the command
+        failed. Never throws.
+
+        Needed because plenty of legitimate git queries fail by design - a ref
+        that does not exist, a repo with no origin/HEAD - and under
+        $ErrorActionPreference = "Stop" their stderr becomes a terminating
+        error even with 2>$null. Asking a question should not be fatal.
+    #>
+    param([Parameter(Mandatory)][string[]]$Arguments)
+
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        # Merge stderr into the pipeline and drop it. "2>$null" alone still
+        # surfaces a NativeCommandError in Windows PowerShell; folding stderr
+        # into objects and filtering them out is what actually silences it.
+        $out = & git -C $RepoRoot @Arguments 2>&1 |
+               Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }
+
+        if ($LASTEXITCODE -ne 0 -or $null -eq $out) { return $null }
+        return ($out | Out-String).Trim()
+    }
+    finally { $ErrorActionPreference = $previous }
+}
+
+function Resolve-ReleaseBranch {
+    <#
+        Ask the remote what its default branch is rather than assuming "main".
+        Many clones have no origin/HEAD, so fall back rather than fail.
+    #>
+    if ($script:ReleaseBranch) { return }
+
+    $originHead = Get-GitOutput @("symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    $script:ReleaseBranch = if ($originHead) { $originHead -replace '^origin/', '' } else { "main" }
+}
+
 function Assert-PublishReady {
     <#
         Checked before anything is built, so a missing prerequisite fails in
@@ -383,6 +429,8 @@ function Assert-PublishReady {
         are not set up for yet.
     #>
     param([Parameter(Mandatory)][bool]$Soft)
+
+    Resolve-ReleaseBranch
 
     $problems = [System.Collections.Generic.List[string]]::new()
 
@@ -396,12 +444,53 @@ function Assert-PublishReady {
         }
     }
 
-    # The release is cut from the tagged commit, so that commit has to be on
-    # the remote already. Otherwise the tag pushes fine but points at work
-    # nobody else can see.
-    $onRemote = git -C $RepoRoot branch -r --contains HEAD 2>$null
-    if (-not $onRemote) {
-        $problems.Add("HEAD is not on the remote yet. Push your branch first, then release.")
+    # Refresh the remote-tracking refs first, or "behind" is measured against
+    # whatever this clone last happened to see.
+    $fetched = Invoke-Native -What "git fetch" -AllowFailure -Command {
+        git -C $RepoRoot fetch --quiet origin $ReleaseBranch 2>$null
+    }
+    if ($fetched -ne 0) {
+        Write-Warn "could not fetch origin - branch checks use possibly stale refs"
+    }
+
+    # The release is cut from whatever commit gets tagged, so pin down exactly
+    # which commit that is: the right branch, and level with its remote.
+    $branch = Get-GitOutput @("rev-parse", "--abbrev-ref", "HEAD")
+
+    if ($branch -eq "HEAD") {
+        $problems.Add("Detached HEAD. Check out $ReleaseBranch before releasing.")
+    }
+    elseif ($branch -ne $ReleaseBranch) {
+        $problems.Add("On branch '$branch', but releases are cut from '$ReleaseBranch'.`n" +
+                      "    git switch $ReleaseBranch    (or pass -ReleaseBranch $branch)")
+    }
+
+    # Compare HEAD against the remote tip rather than asking whether HEAD is
+    # merely an ancestor of it - being behind would pass that weaker test and
+    # quietly ship stale code.
+    $remoteRef = "origin/$ReleaseBranch"
+    $localSha  = Get-GitOutput @("rev-parse", "HEAD")
+    $remoteSha = Get-GitOutput @("rev-parse", $remoteRef)
+
+    if (-not $remoteSha) {
+        $problems.Add("No $remoteRef. Push the branch first: git push -u origin $ReleaseBranch")
+    }
+    elseif ($localSha -ne $remoteSha) {
+        # Which way are we out of step? The fix differs.
+        $ahead  = [int](Get-GitOutput @("rev-list", "--count", "$remoteRef..HEAD"))
+        $behind = [int](Get-GitOutput @("rev-list", "--count", "HEAD..$remoteRef"))
+
+        if ($ahead -gt 0 -and $behind -gt 0) {
+            $problems.Add("HEAD and $remoteRef have diverged ($ahead ahead, $behind behind). Reconcile before releasing.")
+        }
+        elseif ($ahead -gt 0) {
+            $problems.Add("$ahead commit(s) not pushed. The release is cut from the tagged commit:`n" +
+                          "    git push origin $ReleaseBranch")
+        }
+        else {
+            $problems.Add("$behind commit(s) behind $remoteRef. You would release stale code:`n" +
+                          "    git pull")
+        }
     }
 
     if ($problems.Count -eq 0) {
