@@ -1,0 +1,50 @@
+# Publishes a release whenever a v* tag is pushed.
+#
+# A pushed tag on its own only gives GitHub's auto-generated source archives.
+# The built zip becomes a download only because this workflow explicitly
+# creates a release and uploads it as an asset.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # required to create the release and upload assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # A tag that disagrees with the manifest ships a zip whose internal
+      # version does not match its own filename, so refuse to publish.
+      - name: Check tag matches manifest version
+        run: |
+          manifest=$(node -p "require('./manifest.json').version")
+          if [ "$manifest" != "${{ steps.version.outputs.version }}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match manifest version $manifest." >&2
+            exit 1
+          fi
+          echo "Tag and manifest agree on $manifest."
+
+      - name: Build release zip
+        shell: pwsh
+        run: ./scripts/release.ps1
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/claude-chat-clipper-${{ steps.version.outputs.version }}.zip \
+            dist/claude-chat-clipper-${{ steps.version.outputs.version }}.zip.sha256 \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
