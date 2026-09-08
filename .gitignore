@@ -9,6 +9,7 @@ NOTES.md
 *.bak*
 *.old*
 *.backup*
+*.orig*
 
 #=== Env / Secrets ===
 .env
@@ -20,6 +21,7 @@ NOTES.md
 docs/_build/
 site/
 target/
+release/
 
 #=== Python — bytecode / compiled ===
 __pycache__/
