@@ -118,7 +118,7 @@ if (-not $OutDir) { $OutDir = Join-Path $RepoRoot 'release' }
 # The only region you edit after copying this file into a new repo.
 
 # Zip is named <ProjectName>-<version>.zip.
-$ProjectName = 'my-app'
+$ProjectName = 'claude-chat-clipper'
 
 # Where the version lives, repo-relative. Shown in messages; the seam
 # functions below read and write it.
@@ -134,7 +134,7 @@ $BuildDir = 'dist'
 $ExtraPayload = @(
     'README.md'
     'LICENSE'
-    # 'install.ps1'
+    'INSTALL.md'
     # 'config/'
     # 'docs/'
 )
