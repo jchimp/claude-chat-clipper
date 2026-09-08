@@ -122,7 +122,7 @@ $ProjectName = 'claude-chat-clipper'
 
 # Where the version lives, repo-relative. Shown in messages; the seam
 # functions below read and write it.
-$VersionFile = 'package.json'
+$VersionFile = 'manifest.json'
 
 # Directory the build produces, repo-relative. Its *contents* go at the root
 # of the zip.
