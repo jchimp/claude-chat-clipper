@@ -141,8 +141,8 @@ $ExtraPayload = @(
 
 # The package manager to use. npm, pnpm and yarn all work; the clean-install
 # and run verbs differ, so change all three together.
-$PkgMgr        = 'npm'
-$PkgInstallCmd = @('ci')
+$PkgMgr        = ''
+$PkgInstallCmd = @('')
 
 # How the release is packaged. 'zip' stages the build output plus
 # $ExtraPayload into one archive. See the electron template for the
